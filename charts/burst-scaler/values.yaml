@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/your-org/rabbitmq-burst-scaler
+  repository: ghcr.io/rapidataai/rabbitmq-burst-scaler
   pullPolicy: IfNotPresent
   tag: ""  # Defaults to appVersion
 
