@@ -190,7 +190,7 @@ func (s *BurstScaler) GetMetricSpec(ctx context.Context, ref *pb.ScaledObjectRef
 		MetricSpecs: []*pb.MetricSpec{
 			{
 				MetricName: metricName,
-				TargetSize: int64(cfg.BurstReplicas),
+				TargetSize: 1, // Each unit of metric = 1 replica
 			},
 		},
 	}, nil
