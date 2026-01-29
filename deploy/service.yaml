@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq-burst-scaler
+  namespace: keda-system
+  labels:
+    app: rabbitmq-burst-scaler
+spec:
+  type: ClusterIP
+  ports:
+  - name: grpc
+    port: 9090
+    targetPort: grpc
+    protocol: TCP
+  selector:
+    app: rabbitmq-burst-scaler

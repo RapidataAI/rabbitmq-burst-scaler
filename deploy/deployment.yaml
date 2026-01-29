@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq-burst-scaler
+  namespace: keda-system
+  labels:
+    app: rabbitmq-burst-scaler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rabbitmq-burst-scaler
+  template:
+    metadata:
+      labels:
+        app: rabbitmq-burst-scaler
+    spec:
+      serviceAccountName: rabbitmq-burst-scaler
+      containers:
+      - name: scaler
+        image: rabbitmq-burst-scaler:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: grpc
+          containerPort: 9090
+          protocol: TCP
+        env:
+        - name: GRPC_PORT
+          value: "9090"
+        - name: LOG_LEVEL
+          value: "info"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        livenessProbe:
+          grpc:
+            port: 9090
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          grpc:
+            port: 9090
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+            - ALL
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rabbitmq-burst-scaler
+  namespace: keda-system

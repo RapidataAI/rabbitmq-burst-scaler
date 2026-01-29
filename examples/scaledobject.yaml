@@ -1,0 +1,52 @@
+# Example ScaledObject configuration for rabbitmq-burst-scaler
+#
+# This ScaledObject will:
+# - Scale my-service to 5 replicas when a message arrives on "events" exchange with "jobs.created" routing key
+# - Keep 5 replicas for 2 minutes after the last message
+# - Scale back to 0 replicas after 2 minutes of no messages
+#
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: my-service-burst
+  namespace: default
+spec:
+  scaleTargetRef:
+    name: my-service                      # Name of the Deployment to scale
+  pollingInterval: 5                      # How often KEDA checks the scaler (seconds)
+  cooldownPeriod: 30                      # Time before scaling to 0 after metrics drop
+  minReplicaCount: 0                      # Minimum replicas (can be 0 for scale-to-zero)
+  maxReplicaCount: 10                     # Maximum replicas
+  triggers:
+  - type: external
+    metadata:
+      scalerAddress: "rabbitmq-burst-scaler.keda-system:9090"  # Address of the burst scaler
+      # RabbitMQ connection
+      host: "rabbitmq.default"            # RabbitMQ hostname (without port)
+      # port: "5672"                      # Optional: RabbitMQ port (default: 5672)
+      # vhost: "/"                        # Optional: RabbitMQ vhost (default: /)
+      # Source configuration
+      exchange: "events"                  # Exchange to bind to
+      routingKey: "jobs.created"          # Routing key to listen for
+      # Burst configuration
+      burstReplicas: "5"                  # Scale to this many replicas
+      burstDurationMinutes: "2"           # Keep replicas for this many minutes
+    # Use TriggerAuthentication for credentials
+    authenticationRef:
+      name: rabbitmq-auth
+---
+# TriggerAuthentication for RabbitMQ credentials
+# Create a secret first: kubectl create secret generic rabbitmq-secret --from-literal=username=guest --from-literal=password=guest
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: rabbitmq-auth
+  namespace: default
+spec:
+  secretTargetRef:
+  - parameter: username
+    name: rabbitmq-secret
+    key: username
+  - parameter: password
+    name: rabbitmq-secret
+    key: password
