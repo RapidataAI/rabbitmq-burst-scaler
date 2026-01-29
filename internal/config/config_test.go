@@ -1,13 +1,54 @@
 package config
 
 import (
+	"os"
 	"testing"
 	"time"
 )
 
+func setEnvVars(t *testing.T, vars map[string]string) func() {
+	t.Helper()
+	original := make(map[string]string)
+	for k := range vars {
+		original[k] = os.Getenv(k)
+	}
+	for k, v := range vars {
+		os.Setenv(k, v)
+	}
+	return func() {
+		for k, v := range original {
+			if v == "" {
+				os.Unsetenv(k)
+			} else {
+				os.Setenv(k, v)
+			}
+		}
+	}
+}
+
+func clearRabbitMQEnvVars(t *testing.T) func() {
+	t.Helper()
+	vars := []string{"RABBITMQ_HOST", "RABBITMQ_PORT", "RABBITMQ_USERNAME", "RABBITMQ_PASSWORD", "RABBITMQ_VHOST"}
+	original := make(map[string]string)
+	for _, k := range vars {
+		original[k] = os.Getenv(k)
+		os.Unsetenv(k)
+	}
+	return func() {
+		for k, v := range original {
+			if v == "" {
+				os.Unsetenv(k)
+			} else {
+				os.Setenv(k, v)
+			}
+		}
+	}
+}
+
 func TestParseTriggerMetadata(t *testing.T) {
 	tests := []struct {
 		name      string
+		envVars   map[string]string
 		metadata  map[string]string
 		wantErr   bool
 		errString string
@@ -15,8 +56,12 @@ func TestParseTriggerMetadata(t *testing.T) {
 	}{
 		{
 			name: "valid minimal config",
+			envVars: map[string]string{
+				"RABBITMQ_HOST":     "rabbitmq.default",
+				"RABBITMQ_USERNAME": "guest",
+				"RABBITMQ_PASSWORD": "guest",
+			},
 			metadata: map[string]string{
-				"host":          "rabbitmq.default",
 				"exchange":      "events",
 				"routingKey":    "jobs.created",
 				"burstReplicas": "5",
@@ -33,6 +78,12 @@ func TestParseTriggerMetadata(t *testing.T) {
 				if cfg.Vhost != "/" {
 					t.Errorf("expected default vhost /, got %s", cfg.Vhost)
 				}
+				if cfg.Username != "guest" {
+					t.Errorf("expected username guest, got %s", cfg.Username)
+				}
+				if cfg.Password != "guest" {
+					t.Errorf("expected password guest, got %s", cfg.Password)
+				}
 				if cfg.Exchange != "events" {
 					t.Errorf("expected exchange events, got %s", cfg.Exchange)
 				}
@@ -48,13 +99,15 @@ func TestParseTriggerMetadata(t *testing.T) {
 			},
 		},
 		{
-			name: "valid full config",
+			name: "valid full config with custom port and vhost",
+			envVars: map[string]string{
+				"RABBITMQ_HOST":     "rabbitmq.default",
+				"RABBITMQ_PORT":     "5673",
+				"RABBITMQ_USERNAME": "admin",
+				"RABBITMQ_PASSWORD": "secret",
+				"RABBITMQ_VHOST":    "myapp",
+			},
 			metadata: map[string]string{
-				"host":          "rabbitmq.default",
-				"port":          "5673",
-				"username":      "guest",
-				"password":      "secret",
-				"vhost":         "myapp",
 				"exchange":      "events",
 				"routingKey":    "jobs.created",
 				"burstReplicas": "10",
@@ -65,8 +118,8 @@ func TestParseTriggerMetadata(t *testing.T) {
 				if cfg.Port != 5673 {
 					t.Errorf("expected port 5673, got %d", cfg.Port)
 				}
-				if cfg.Username != "guest" {
-					t.Errorf("expected username guest, got %s", cfg.Username)
+				if cfg.Username != "admin" {
+					t.Errorf("expected username admin, got %s", cfg.Username)
 				}
 				if cfg.Password != "secret" {
 					t.Errorf("expected password secret, got %s", cfg.Password)
@@ -84,8 +137,12 @@ func TestParseTriggerMetadata(t *testing.T) {
 		},
 		{
 			name: "valid config with seconds",
+			envVars: map[string]string{
+				"RABBITMQ_HOST":     "rabbitmq.default",
+				"RABBITMQ_USERNAME": "guest",
+				"RABBITMQ_PASSWORD": "guest",
+			},
 			metadata: map[string]string{
-				"host":          "rabbitmq.default",
 				"exchange":      "events",
 				"routingKey":    "jobs.created",
 				"burstReplicas": "5",
@@ -100,8 +157,12 @@ func TestParseTriggerMetadata(t *testing.T) {
 		},
 		{
 			name: "valid config with hours",
+			envVars: map[string]string{
+				"RABBITMQ_HOST":     "rabbitmq.default",
+				"RABBITMQ_USERNAME": "guest",
+				"RABBITMQ_PASSWORD": "guest",
+			},
 			metadata: map[string]string{
-				"host":          "rabbitmq.default",
 				"exchange":      "events",
 				"routingKey":    "jobs.created",
 				"burstReplicas": "5",
@@ -116,8 +177,12 @@ func TestParseTriggerMetadata(t *testing.T) {
 		},
 		{
 			name: "valid config with combined duration",
+			envVars: map[string]string{
+				"RABBITMQ_HOST":     "rabbitmq.default",
+				"RABBITMQ_USERNAME": "guest",
+				"RABBITMQ_PASSWORD": "guest",
+			},
 			metadata: map[string]string{
-				"host":          "rabbitmq.default",
 				"exchange":      "events",
 				"routingKey":    "jobs.created",
 				"burstReplicas": "5",
@@ -132,7 +197,8 @@ func TestParseTriggerMetadata(t *testing.T) {
 			},
 		},
 		{
-			name: "missing host",
+			name:    "missing RABBITMQ_HOST",
+			envVars: map[string]string{},
 			metadata: map[string]string{
 				"exchange":      "events",
 				"routingKey":    "jobs.created",
@@ -140,12 +206,62 @@ func TestParseTriggerMetadata(t *testing.T) {
 				"burstDuration": "2m",
 			},
 			wantErr:   true,
-			errString: "host is required",
+			errString: "RABBITMQ_HOST environment variable is required",
+		},
+		{
+			name: "missing RABBITMQ_USERNAME",
+			envVars: map[string]string{
+				"RABBITMQ_HOST": "rabbitmq.default",
+			},
+			metadata: map[string]string{
+				"exchange":      "events",
+				"routingKey":    "jobs.created",
+				"burstReplicas": "5",
+				"burstDuration": "2m",
+			},
+			wantErr:   true,
+			errString: "RABBITMQ_USERNAME environment variable is required",
+		},
+		{
+			name: "missing RABBITMQ_PASSWORD",
+			envVars: map[string]string{
+				"RABBITMQ_HOST":     "rabbitmq.default",
+				"RABBITMQ_USERNAME": "guest",
+			},
+			metadata: map[string]string{
+				"exchange":      "events",
+				"routingKey":    "jobs.created",
+				"burstReplicas": "5",
+				"burstDuration": "2m",
+			},
+			wantErr:   true,
+			errString: "RABBITMQ_PASSWORD environment variable is required",
+		},
+		{
+			name: "invalid RABBITMQ_PORT",
+			envVars: map[string]string{
+				"RABBITMQ_HOST":     "rabbitmq.default",
+				"RABBITMQ_PORT":     "invalid",
+				"RABBITMQ_USERNAME": "guest",
+				"RABBITMQ_PASSWORD": "guest",
+			},
+			metadata: map[string]string{
+				"exchange":      "events",
+				"routingKey":    "jobs.created",
+				"burstReplicas": "5",
+				"burstDuration": "2m",
+			},
+			wantErr:   true,
+			errString: "RABBITMQ_PORT must be a valid integer",
 		},
 		{
 			name: "missing exchange",
+			envVars: map[string]string{
+				"RABBITMQ_HOST":     "rabbitmq.default",
+				"RABBITMQ_USERNAME": "guest",
+				"RABBITMQ_PASSWORD": "guest",
+			},
 			metadata: map[string]string{
-				"host":          "rabbitmq.default",
 				"routingKey":    "jobs.created",
 				"burstReplicas": "5",
 				"burstDuration": "2m",
@@ -155,8 +271,12 @@ func TestParseTriggerMetadata(t *testing.T) {
 		},
 		{
 			name: "missing routingKey",
+			envVars: map[string]string{
+				"RABBITMQ_HOST":     "rabbitmq.default",
+				"RABBITMQ_USERNAME": "guest",
+				"RABBITMQ_PASSWORD": "guest",
+			},
 			metadata: map[string]string{
-				"host":          "rabbitmq.default",
 				"exchange":      "events",
 				"burstReplicas": "5",
 				"burstDuration": "2m",
@@ -166,8 +286,12 @@ func TestParseTriggerMetadata(t *testing.T) {
 		},
 		{
 			name: "missing burstReplicas",
+			envVars: map[string]string{
+				"RABBITMQ_HOST":     "rabbitmq.default",
+				"RABBITMQ_USERNAME": "guest",
+				"RABBITMQ_PASSWORD": "guest",
+			},
 			metadata: map[string]string{
-				"host":          "rabbitmq.default",
 				"exchange":      "events",
 				"routingKey":    "jobs.created",
 				"burstDuration": "2m",
@@ -177,8 +301,12 @@ func TestParseTriggerMetadata(t *testing.T) {
 		},
 		{
 			name: "missing burstDuration",
+			envVars: map[string]string{
+				"RABBITMQ_HOST":     "rabbitmq.default",
+				"RABBITMQ_USERNAME": "guest",
+				"RABBITMQ_PASSWORD": "guest",
+			},
 			metadata: map[string]string{
-				"host":          "rabbitmq.default",
 				"exchange":      "events",
 				"routingKey":    "jobs.created",
 				"burstReplicas": "5",
@@ -188,8 +316,12 @@ func TestParseTriggerMetadata(t *testing.T) {
 		},
 		{
 			name: "invalid burstReplicas",
+			envVars: map[string]string{
+				"RABBITMQ_HOST":     "rabbitmq.default",
+				"RABBITMQ_USERNAME": "guest",
+				"RABBITMQ_PASSWORD": "guest",
+			},
 			metadata: map[string]string{
-				"host":          "rabbitmq.default",
 				"exchange":      "events",
 				"routingKey":    "jobs.created",
 				"burstReplicas": "invalid",
@@ -200,8 +332,12 @@ func TestParseTriggerMetadata(t *testing.T) {
 		},
 		{
 			name: "zero burstReplicas",
+			envVars: map[string]string{
+				"RABBITMQ_HOST":     "rabbitmq.default",
+				"RABBITMQ_USERNAME": "guest",
+				"RABBITMQ_PASSWORD": "guest",
+			},
 			metadata: map[string]string{
-				"host":          "rabbitmq.default",
 				"exchange":      "events",
 				"routingKey":    "jobs.created",
 				"burstReplicas": "0",
@@ -212,8 +348,12 @@ func TestParseTriggerMetadata(t *testing.T) {
 		},
 		{
 			name: "invalid burstDuration",
+			envVars: map[string]string{
+				"RABBITMQ_HOST":     "rabbitmq.default",
+				"RABBITMQ_USERNAME": "guest",
+				"RABBITMQ_PASSWORD": "guest",
+			},
 			metadata: map[string]string{
-				"host":          "rabbitmq.default",
 				"exchange":      "events",
 				"routingKey":    "jobs.created",
 				"burstReplicas": "5",
@@ -224,8 +364,12 @@ func TestParseTriggerMetadata(t *testing.T) {
 		},
 		{
 			name: "burstDuration too short",
+			envVars: map[string]string{
+				"RABBITMQ_HOST":     "rabbitmq.default",
+				"RABBITMQ_USERNAME": "guest",
+				"RABBITMQ_PASSWORD": "guest",
+			},
 			metadata: map[string]string{
-				"host":          "rabbitmq.default",
 				"exchange":      "events",
 				"routingKey":    "jobs.created",
 				"burstReplicas": "5",
@@ -234,23 +378,21 @@ func TestParseTriggerMetadata(t *testing.T) {
 			wantErr:   true,
 			errString: "burstDuration must be at least 1s",
 		},
-		{
-			name: "invalid port",
-			metadata: map[string]string{
-				"host":          "rabbitmq.default",
-				"port":          "invalid",
-				"exchange":      "events",
-				"routingKey":    "jobs.created",
-				"burstReplicas": "5",
-				"burstDuration": "2m",
-			},
-			wantErr:   true,
-			errString: "port must be a valid integer",
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Clear all RabbitMQ env vars first
+			cleanup := clearRabbitMQEnvVars(t)
+			defer cleanup()
+
+			// Set test-specific env vars
+			if tt.envVars != nil {
+				for k, v := range tt.envVars {
+					os.Setenv(k, v)
+				}
+			}
+
 			cfg, err := ParseTriggerMetadata(tt.metadata)
 
 			if tt.wantErr {

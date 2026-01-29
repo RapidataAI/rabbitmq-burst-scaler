@@ -45,3 +45,15 @@ securityContext:
   capabilities:
     drop:
       - ALL
+
+# Extra environment variables
+extraEnv: []
+# Example:
+# extraEnv:
+#   - name: RABBITMQ_HOST
+#     value: "rabbitmq.example.com"
+#   - name: RABBITMQ_PASSWORD
+#     valueFrom:
+#       secretKeyRef:
+#         name: rabbitmq-credentials
+#         key: password

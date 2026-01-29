@@ -9,6 +9,34 @@ import (
 	pb "github.com/rapidataai/rabbitmq-burst-scaler/proto"
 )
 
+func clearRabbitMQEnvVars(t *testing.T) func() {
+	t.Helper()
+	vars := []string{"RABBITMQ_HOST", "RABBITMQ_PORT", "RABBITMQ_USERNAME", "RABBITMQ_PASSWORD", "RABBITMQ_VHOST"}
+	original := make(map[string]string)
+	for _, k := range vars {
+		original[k] = os.Getenv(k)
+		os.Unsetenv(k)
+	}
+	return func() {
+		for k, v := range original {
+			if v == "" {
+				os.Unsetenv(k)
+			} else {
+				os.Setenv(k, v)
+			}
+		}
+	}
+}
+
+func setRabbitMQEnvVars(t *testing.T) func() {
+	t.Helper()
+	cleanup := clearRabbitMQEnvVars(t)
+	os.Setenv("RABBITMQ_HOST", "rabbitmq.default")
+	os.Setenv("RABBITMQ_USERNAME", "guest")
+	os.Setenv("RABBITMQ_PASSWORD", "guest")
+	return cleanup
+}
+
 func TestScaledObjectKey(t *testing.T) {
 	tests := []struct {
 		namespace string
@@ -39,12 +67,14 @@ func TestBurstScalerValidation(t *testing.T) {
 
 	tests := []struct {
 		name     string
+		setupEnv func(t *testing.T) func()
 		ref      *pb.ScaledObjectRef
 		wantErr  bool
 		errMatch string
 	}{
 		{
-			name: "missing host",
+			name:     "missing RABBITMQ_HOST env var",
+			setupEnv: clearRabbitMQEnvVars,
 			ref: &pb.ScaledObjectRef{
 				Name:      "test",
 				Namespace: "default",
@@ -56,15 +86,15 @@ func TestBurstScalerValidation(t *testing.T) {
 				},
 			},
 			wantErr:  true,
-			errMatch: "host is required",
+			errMatch: "RABBITMQ_HOST environment variable is required",
 		},
 		{
-			name: "missing exchange",
+			name:     "missing exchange",
+			setupEnv: setRabbitMQEnvVars,
 			ref: &pb.ScaledObjectRef{
 				Name:      "test",
 				Namespace: "default",
 				ScalerMetadata: map[string]string{
-					"host":          "rabbitmq.default:5672",
 					"routingKey":    "jobs.created",
 					"burstReplicas": "5",
 					"burstDuration": "2m",
@@ -74,12 +104,12 @@ func TestBurstScalerValidation(t *testing.T) {
 			errMatch: "exchange is required",
 		},
 		{
-			name: "missing routingKey",
+			name:     "missing routingKey",
+			setupEnv: setRabbitMQEnvVars,
 			ref: &pb.ScaledObjectRef{
 				Name:      "test",
 				Namespace: "default",
 				ScalerMetadata: map[string]string{
-					"host":          "rabbitmq.default:5672",
 					"exchange":      "events",
 					"burstReplicas": "5",
 					"burstDuration": "2m",
@@ -89,12 +119,12 @@ func TestBurstScalerValidation(t *testing.T) {
 			errMatch: "routingKey is required",
 		},
 		{
-			name: "missing burstReplicas",
+			name:     "missing burstReplicas",
+			setupEnv: setRabbitMQEnvVars,
 			ref: &pb.ScaledObjectRef{
 				Name:      "test",
 				Namespace: "default",
 				ScalerMetadata: map[string]string{
-					"host":          "rabbitmq.default:5672",
 					"exchange":      "events",
 					"routingKey":    "jobs.created",
 					"burstDuration": "2m",
@@ -104,12 +134,12 @@ func TestBurstScalerValidation(t *testing.T) {
 			errMatch: "burstReplicas is required",
 		},
 		{
-			name: "missing burstDuration",
+			name:     "missing burstDuration",
+			setupEnv: setRabbitMQEnvVars,
 			ref: &pb.ScaledObjectRef{
 				Name:      "test",
 				Namespace: "default",
 				ScalerMetadata: map[string]string{
-					"host":          "rabbitmq.default:5672",
 					"exchange":      "events",
 					"routingKey":    "jobs.created",
 					"burstReplicas": "5",
@@ -119,12 +149,12 @@ func TestBurstScalerValidation(t *testing.T) {
 			errMatch: "burstDuration is required",
 		},
 		{
-			name: "invalid burstReplicas",
+			name:     "invalid burstReplicas",
+			setupEnv: setRabbitMQEnvVars,
 			ref: &pb.ScaledObjectRef{
 				Name:      "test",
 				Namespace: "default",
 				ScalerMetadata: map[string]string{
-					"host":          "rabbitmq.default:5672",
 					"exchange":      "events",
 					"routingKey":    "jobs.created",
 					"burstReplicas": "invalid",
@@ -135,12 +165,12 @@ func TestBurstScalerValidation(t *testing.T) {
 			errMatch: "burstReplicas must be a valid integer",
 		},
 		{
-			name: "invalid burstDuration",
+			name:     "invalid burstDuration",
+			setupEnv: setRabbitMQEnvVars,
 			ref: &pb.ScaledObjectRef{
 				Name:      "test",
 				Namespace: "default",
 				ScalerMetadata: map[string]string{
-					"host":          "rabbitmq.default:5672",
 					"exchange":      "events",
 					"routingKey":    "jobs.created",
 					"burstReplicas": "5",
@@ -154,6 +184,9 @@ func TestBurstScalerValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			cleanup := tt.setupEnv(t)
+			defer cleanup()
+
 			_, err := s.IsActive(ctx, tt.ref)
 
 			if tt.wantErr {

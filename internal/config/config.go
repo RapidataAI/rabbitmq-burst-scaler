@@ -3,53 +3,83 @@ package config
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 )
 
-// TriggerConfig holds the configuration parsed from ScaledObject trigger metadata.
+// TriggerConfig holds the configuration parsed from ScaledObject trigger metadata
+// and environment variables.
 type TriggerConfig struct {
-	// RabbitMQ connection
+	// RabbitMQ connection (from environment variables)
 	Host     string
 	Port     int
 	Username string
 	Password string
 	Vhost    string
 
-	// Source configuration
+	// Source configuration (from metadata)
 	Exchange   string
 	RoutingKey string
 
-	// Burst configuration
+	// Burst configuration (from metadata)
 	BurstReplicas int
 	BurstDuration time.Duration
 }
 
 // ParseTriggerMetadata parses the trigger metadata from a ScaledObject into TriggerConfig.
+// RabbitMQ connection settings are read from environment variables, while trigger-specific
+// settings (exchange, routingKey, burstReplicas, burstDuration) come from metadata.
 func ParseTriggerMetadata(metadata map[string]string) (*TriggerConfig, error) {
-	config := &TriggerConfig{
-		Port:  5672,
-		Vhost: "/",
+	config := &TriggerConfig{}
+
+	// Read RabbitMQ connection settings from environment variables
+	config.Host = os.Getenv("RABBITMQ_HOST")
+	if config.Host == "" {
+		return nil, errors.New("RABBITMQ_HOST environment variable is required")
 	}
 
-	// Required fields
+	config.Username = os.Getenv("RABBITMQ_USERNAME")
+	if config.Username == "" {
+		return nil, errors.New("RABBITMQ_USERNAME environment variable is required")
+	}
+
+	config.Password = os.Getenv("RABBITMQ_PASSWORD")
+	if config.Password == "" {
+		return nil, errors.New("RABBITMQ_PASSWORD environment variable is required")
+	}
+
+	// Optional environment variables with defaults
+	portStr := os.Getenv("RABBITMQ_PORT")
+	if portStr == "" {
+		config.Port = 5672
+	} else {
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			return nil, fmt.Errorf("RABBITMQ_PORT must be a valid integer: %w", err)
+		}
+		config.Port = port
+	}
+
+	config.Vhost = os.Getenv("RABBITMQ_VHOST")
+	if config.Vhost == "" {
+		config.Vhost = "/"
+	}
+
+	// Required metadata fields
 	var ok bool
 
-	if config.Host, ok = metadata["host"]; !ok || config.Host == "" {
-		return nil, errors.New("host is required")
-	}
-
 	if config.Exchange, ok = metadata["exchange"]; !ok || config.Exchange == "" {
-		return nil, errors.New("exchange is required")
+		return nil, errors.New("exchange is required in metadata")
 	}
 
 	if config.RoutingKey, ok = metadata["routingKey"]; !ok || config.RoutingKey == "" {
-		return nil, errors.New("routingKey is required")
+		return nil, errors.New("routingKey is required in metadata")
 	}
 
 	burstReplicasStr, ok := metadata["burstReplicas"]
 	if !ok || burstReplicasStr == "" {
-		return nil, errors.New("burstReplicas is required")
+		return nil, errors.New("burstReplicas is required in metadata")
 	}
 	burstReplicas, err := strconv.Atoi(burstReplicasStr)
 	if err != nil {
@@ -62,7 +92,7 @@ func ParseTriggerMetadata(metadata map[string]string) (*TriggerConfig, error) {
 
 	burstDurationStr, ok := metadata["burstDuration"]
 	if !ok || burstDurationStr == "" {
-		return nil, errors.New("burstDuration is required")
+		return nil, errors.New("burstDuration is required in metadata")
 	}
 	burstDuration, err := time.ParseDuration(burstDurationStr)
 	if err != nil {
@@ -72,23 +102,6 @@ func ParseTriggerMetadata(metadata map[string]string) (*TriggerConfig, error) {
 		return nil, errors.New("burstDuration must be at least 1s")
 	}
 	config.BurstDuration = burstDuration
-
-	// Optional fields
-	if port, ok := metadata["port"]; ok && port != "" {
-		portNum, err := strconv.Atoi(port)
-		if err != nil {
-			return nil, fmt.Errorf("port must be a valid integer: %w", err)
-		}
-		config.Port = portNum
-	}
-
-	if vhost, ok := metadata["vhost"]; ok && vhost != "" {
-		config.Vhost = vhost
-	}
-
-	// Credentials (may come from TriggerAuthentication)
-	config.Username = metadata["username"]
-	config.Password = metadata["password"]
 
 	return config, nil
 }

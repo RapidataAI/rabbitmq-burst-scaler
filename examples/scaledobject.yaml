@@ -5,6 +5,10 @@
 # - Keep 5 replicas for 2 minutes after the last message
 # - Scale back to 0 replicas after 2 minutes of no messages
 #
+# NOTE: RabbitMQ connection settings (host, port, username, password, vhost) are configured
+# via environment variables on the burst-scaler deployment, NOT in ScaledObject metadata.
+# See the README for deployment configuration.
+#
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
@@ -21,32 +25,9 @@ spec:
   - type: external-push
     metadata:
       scalerAddress: "rabbitmq-burst-scaler.keda-system:9090"  # Address of the burst scaler
-      # RabbitMQ connection
-      host: "rabbitmq.default"            # RabbitMQ hostname (without port)
-      # port: "5672"                      # Optional: RabbitMQ port (default: 5672)
-      # vhost: "/"                        # Optional: RabbitMQ vhost (default: /)
       # Source configuration
       exchange: "events"                  # Exchange to bind to
       routingKey: "jobs.created"          # Routing key to listen for
       # Burst configuration
       burstReplicas: "5"                  # Scale to this many replicas
       burstDuration: "2m"                 # Keep replicas for this duration (e.g., "30s", "2m", "1h")
-    # Use TriggerAuthentication for credentials
-    authenticationRef:
-      name: rabbitmq-auth
----
-# TriggerAuthentication for RabbitMQ credentials
-# Create a secret first: kubectl create secret generic rabbitmq-secret --from-literal=username=guest --from-literal=password=guest
-apiVersion: keda.sh/v1alpha1
-kind: TriggerAuthentication
-metadata:
-  name: rabbitmq-auth
-  namespace: default
-spec:
-  secretTargetRef:
-  - parameter: username
-    name: rabbitmq-secret
-    key: username
-  - parameter: password
-    name: rabbitmq-secret
-    key: password

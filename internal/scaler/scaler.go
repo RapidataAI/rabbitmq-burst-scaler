@@ -130,27 +130,6 @@ func (s *BurstScaler) ensureConsumer(ctx context.Context, ref *pb.ScaledObjectRe
 		return nil, nil, fmt.Errorf("failed to parse trigger metadata: %w", err)
 	}
 
-	s.logger.Info("parsed trigger config",
-		"host", cfg.Host,
-		"port", cfg.Port,
-		"vhost", cfg.Vhost,
-		"username", cfg.Username,
-		"exchange", cfg.Exchange,
-		"routingKey", cfg.RoutingKey,
-		"burstReplicas", cfg.BurstReplicas,
-		"burstDuration", cfg.BurstDuration,
-	)
-	s.logger.Error("DEBUG: parsed trigger config (error level)",
-		"host", cfg.Host,
-		"port", cfg.Port,
-		"vhost", cfg.Vhost,
-		"username", cfg.Username,
-		"exchange", cfg.Exchange,
-		"routingKey", cfg.RoutingKey,
-		"burstReplicas", cfg.BurstReplicas,
-		"burstDuration", cfg.BurstDuration,
-	)
-
 	// Cache config for later use
 	s.setConfig(ref.Namespace, ref.Name, cfg)
 

@@ -67,6 +67,22 @@ resource "helm_release" "rabbitmq_burst_scaler" {
     value = "v1.0.0"
   }
 
+  # RabbitMQ connection settings
+  set {
+    name  = "rabbitmq.host"
+    value = "rabbitmq.default.svc.cluster.local"
+  }
+
+  set_sensitive {
+    name  = "rabbitmq.username"
+    value = var.rabbitmq_username
+  }
+
+  set_sensitive {
+    name  = "rabbitmq.password"
+    value = var.rabbitmq_password
+  }
+
   depends_on = [helm_release.keda]
 }
 ```
@@ -78,7 +94,16 @@ helm repo add rabbitmq-burst-scaler https://your-org.github.io/rabbitmq-burst-sc
 helm install rabbitmq-burst-scaler rabbitmq-burst-scaler/rabbitmq-burst-scaler \
   --namespace keda-system \
   --set image.repository=ghcr.io/your-org/rabbitmq-burst-scaler \
-  --set image.tag=v1.0.0
+  --set image.tag=v1.0.0 \
+  --set rabbitmq.host=rabbitmq.default.svc.cluster.local \
+  --set rabbitmq.username=guest \
+  --set rabbitmq.password=guest
+```
+
+### Option 3: Plain Kubernetes Manifests
+
+```bash
+kubectl apply -f deploy/
 ```
 
 ### Helm Values
@@ -91,12 +116,60 @@ helm install rabbitmq-burst-scaler rabbitmq-burst-scaler/rabbitmq-burst-scaler \
 | `logLevel` | Log level (info/debug) | `info` |
 | `resources.requests.cpu` | CPU request | `50m` |
 | `resources.requests.memory` | Memory request | `64Mi` |
+| `rabbitmq.host` | RabbitMQ hostname | `""` |
+| `rabbitmq.port` | RabbitMQ port | `5672` |
+| `rabbitmq.vhost` | RabbitMQ virtual host | `/` |
+| `rabbitmq.username` | RabbitMQ username | `""` |
+| `rabbitmq.password` | RabbitMQ password | `""` |
+| `rabbitmq.existingSecret` | Use existing secret for credentials | `""` |
 
-### Option 3: Plain Kubernetes Manifests
+## Configuration
 
-```bash
-kubectl apply -f deploy/
+### RabbitMQ Connection (Environment Variables)
+
+RabbitMQ connection settings are configured via environment variables on the burst-scaler deployment. This is the standard pattern for KEDA external scalers, as KEDA does not pass TriggerAuthentication values to external scalers via gRPC.
+
+| Environment Variable | Required | Description | Default |
+|---------------------|----------|-------------|---------|
+| `RABBITMQ_HOST` | Yes | RabbitMQ hostname | - |
+| `RABBITMQ_PORT` | No | RabbitMQ port | `5672` |
+| `RABBITMQ_USERNAME` | Yes | RabbitMQ username | - |
+| `RABBITMQ_PASSWORD` | Yes | RabbitMQ password | - |
+| `RABBITMQ_VHOST` | No | RabbitMQ virtual host | `/` |
+
+Example deployment configuration:
+
+```yaml
+env:
+- name: RABBITMQ_HOST
+  value: "rabbitmq.default.svc.cluster.local"
+- name: RABBITMQ_PORT
+  value: "5672"
+- name: RABBITMQ_USERNAME
+  valueFrom:
+    secretKeyRef:
+      name: rabbitmq-credentials
+      key: username
+- name: RABBITMQ_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: rabbitmq-credentials
+      key: password
+- name: RABBITMQ_VHOST
+  value: "/"
 ```
+
+### Trigger Metadata (ScaledObject)
+
+Trigger-specific settings are configured in the ScaledObject metadata:
+
+| Parameter | Required | Description | Default |
+|-----------|----------|-------------|---------|
+| `scalerAddress` | Yes | Address of the burst scaler service | - |
+| `exchange` | Yes | Exchange to bind the consumer to | - |
+| `routingKey` | Yes | Routing key to listen for | - |
+| `burstReplicas` | Yes | Number of replicas to scale to | - |
+| `burstDuration` | Yes | Duration to maintain burst replicas (e.g., "30s", "2m", "1h") | - |
 
 ## Usage
 
@@ -120,44 +193,11 @@ spec:
   - type: external-push
     metadata:
       scalerAddress: "rabbitmq-burst-scaler.keda-system:9090"
-      host: "rabbitmq.default"
       exchange: "events"
       routingKey: "orders.created"
       burstReplicas: "5"
       burstDuration: "2m"
-    authenticationRef:
-      name: rabbitmq-auth
 ```
-
-### TriggerAuthentication (once per namespace or cluster)
-
-```yaml
-apiVersion: keda.sh/v1alpha1
-kind: TriggerAuthentication
-metadata:
-  name: rabbitmq-auth
-spec:
-  secretTargetRef:
-  - parameter: username
-    name: rabbitmq-secret
-    key: username
-  - parameter: password
-    name: rabbitmq-secret
-    key: password
-```
-
-### Trigger Metadata Reference
-
-| Parameter | Required | Description | Default |
-|-----------|----------|-------------|---------|
-| `scalerAddress` | Yes | Address of the burst scaler service | - |
-| `host` | Yes | RabbitMQ hostname | - |
-| `port` | No | RabbitMQ port | `5672` |
-| `vhost` | No | RabbitMQ virtual host | `/` |
-| `exchange` | Yes | Exchange to bind the consumer to | - |
-| `routingKey` | Yes | Routing key to listen for | - |
-| `burstReplicas` | Yes | Number of replicas to scale to | - |
-| `burstDuration` | Yes | Duration to maintain burst replicas (e.g., "30s", "2m", "1h") | - |
 
 ### Duration Format
 
@@ -200,6 +240,9 @@ go test -race -coverprofile=coverage.out ./...
 ```bash
 export GRPC_PORT=9090
 export LOG_LEVEL=debug
+export RABBITMQ_HOST=localhost
+export RABBITMQ_USERNAME=guest
+export RABBITMQ_PASSWORD=guest
 go run ./cmd/scaler
 ```
 
