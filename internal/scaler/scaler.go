@@ -180,7 +180,7 @@ func (s *BurstScaler) IsActive(ctx context.Context, ref *pb.ScaledObjectRef) (*p
 func (s *BurstScaler) GetMetricSpec(ctx context.Context, ref *pb.ScaledObjectRef) (*pb.GetMetricSpecResponse, error) {
 	s.logger.Debug("GetMetricSpec called", "name", ref.Name, "namespace", ref.Namespace)
 
-	cfg, _, err := s.ensureConsumer(ctx, ref)
+	_, _, err := s.ensureConsumer(ctx, ref)
 	if err != nil {
 		s.logger.Error("failed to ensure consumer", "error", err)
 		return nil, err
