@@ -9,32 +9,20 @@ import (
 	pb "github.com/rapidataai/rabbitmq-burst-scaler/proto"
 )
 
-func clearRabbitMQEnvVars(t *testing.T) func() {
+func clearRabbitMQEnvVars(t *testing.T) {
 	t.Helper()
-	vars := []string{"RABBITMQ_HOST", "RABBITMQ_PORT", "RABBITMQ_USERNAME", "RABBITMQ_PASSWORD", "RABBITMQ_VHOST"}
-	original := make(map[string]string)
-	for _, k := range vars {
-		original[k] = os.Getenv(k)
-		os.Unsetenv(k)
-	}
-	return func() {
-		for k, v := range original {
-			if v == "" {
-				os.Unsetenv(k)
-			} else {
-				os.Setenv(k, v)
-			}
-		}
-	}
+	t.Setenv("RABBITMQ_HOST", "")
+	t.Setenv("RABBITMQ_PORT", "")
+	t.Setenv("RABBITMQ_USERNAME", "")
+	t.Setenv("RABBITMQ_PASSWORD", "")
+	t.Setenv("RABBITMQ_VHOST", "")
 }
 
-func setRabbitMQEnvVars(t *testing.T) func() {
+func setRabbitMQEnvVars(t *testing.T) {
 	t.Helper()
-	cleanup := clearRabbitMQEnvVars(t)
-	os.Setenv("RABBITMQ_HOST", "rabbitmq.default")
-	os.Setenv("RABBITMQ_USERNAME", "guest")
-	os.Setenv("RABBITMQ_PASSWORD", "guest")
-	return cleanup
+	t.Setenv("RABBITMQ_HOST", "rabbitmq.default")
+	t.Setenv("RABBITMQ_USERNAME", "guest")
+	t.Setenv("RABBITMQ_PASSWORD", "guest")
 }
 
 func TestScaledObjectKey(t *testing.T) {
@@ -67,7 +55,7 @@ func TestBurstScalerValidation(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		setupEnv func(t *testing.T) func()
+		setupEnv func(t *testing.T)
 		ref      *pb.ScaledObjectRef
 		wantErr  bool
 		errMatch string
@@ -184,8 +172,7 @@ func TestBurstScalerValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cleanup := tt.setupEnv(t)
-			defer cleanup()
+			tt.setupEnv(t)
 
 			_, err := s.IsActive(ctx, tt.ref)
 

@@ -1,48 +1,17 @@
 package config
 
 import (
-	"os"
 	"testing"
 	"time"
 )
 
-func setEnvVars(t *testing.T, vars map[string]string) func() {
+func clearRabbitMQEnvVars(t *testing.T) {
 	t.Helper()
-	original := make(map[string]string)
-	for k := range vars {
-		original[k] = os.Getenv(k)
-	}
-	for k, v := range vars {
-		os.Setenv(k, v)
-	}
-	return func() {
-		for k, v := range original {
-			if v == "" {
-				os.Unsetenv(k)
-			} else {
-				os.Setenv(k, v)
-			}
-		}
-	}
-}
-
-func clearRabbitMQEnvVars(t *testing.T) func() {
-	t.Helper()
-	vars := []string{"RABBITMQ_HOST", "RABBITMQ_PORT", "RABBITMQ_USERNAME", "RABBITMQ_PASSWORD", "RABBITMQ_VHOST"}
-	original := make(map[string]string)
-	for _, k := range vars {
-		original[k] = os.Getenv(k)
-		os.Unsetenv(k)
-	}
-	return func() {
-		for k, v := range original {
-			if v == "" {
-				os.Unsetenv(k)
-			} else {
-				os.Setenv(k, v)
-			}
-		}
-	}
+	t.Setenv("RABBITMQ_HOST", "")
+	t.Setenv("RABBITMQ_PORT", "")
+	t.Setenv("RABBITMQ_USERNAME", "")
+	t.Setenv("RABBITMQ_PASSWORD", "")
+	t.Setenv("RABBITMQ_VHOST", "")
 }
 
 func TestParseTriggerMetadata(t *testing.T) {
@@ -383,14 +352,11 @@ func TestParseTriggerMetadata(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clear all RabbitMQ env vars first
-			cleanup := clearRabbitMQEnvVars(t)
-			defer cleanup()
+			clearRabbitMQEnvVars(t)
 
 			// Set test-specific env vars
-			if tt.envVars != nil {
-				for k, v := range tt.envVars {
-					os.Setenv(k, v)
-				}
+			for k, v := range tt.envVars {
+				t.Setenv(k, v)
 			}
 
 			cfg, err := ParseTriggerMetadata(tt.metadata)
