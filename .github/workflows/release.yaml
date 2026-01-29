@@ -56,12 +56,13 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  helm-package:
-    name: Package Helm Chart
+  helm-push:
+    name: Push Helm Chart to OCI Registry
     runs-on: ubuntu-latest
     needs: build-and-push
     permissions:
       contents: write
+      packages: write
 
     steps:
       - name: Checkout code
@@ -81,14 +82,14 @@ jobs:
           sed -i "s/^version:.*/version: ${{ steps.version.outputs.version }}/" charts/burst-scaler/Chart.yaml
           sed -i "s/^appVersion:.*/appVersion: \"${{ steps.version.outputs.version }}\"/" charts/burst-scaler/Chart.yaml
 
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
       - name: Package Helm chart
         run: helm package ./charts/burst-scaler
 
-      - name: Upload Helm chart artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: helm-chart
-          path: "*.tgz"
+      - name: Push to OCI registry
+        run: helm push rabbitmq-burst-scaler-${{ steps.version.outputs.version }}.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
