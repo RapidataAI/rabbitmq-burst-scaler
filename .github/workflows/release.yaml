@@ -89,7 +89,7 @@ jobs:
         run: helm package ./charts/burst-scaler
 
       - name: Push to OCI registry
-        run: helm push rabbitmq-burst-scaler-${{ steps.version.outputs.version }}.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
+        run: helm push rabbitmq-burst-scaler-${{ steps.version.outputs.version }}.tgz oci://ghcr.io/rapidataai/charts
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
