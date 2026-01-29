@@ -19,6 +19,7 @@ type Consumer struct {
 	namespace        string
 	queueName        string
 	stateManager     *StateManager
+	onBurst          func() // Callback for push notifications
 	logger           *slog.Logger
 	cancel           context.CancelFunc
 	done             chan struct{}
@@ -55,6 +56,7 @@ func (m *ConsumerManager) GetOrCreateConsumer(
 	scaledObjectName, namespace string,
 	cfg *config.TriggerConfig,
 	stateManager *StateManager,
+	onBurst func(), // Callback for push notifications
 ) (*Consumer, error) {
 	key := consumerKey(namespace, scaledObjectName)
 
@@ -73,7 +75,7 @@ func (m *ConsumerManager) GetOrCreateConsumer(
 		return consumer, nil
 	}
 
-	consumer, err := m.createConsumer(ctx, scaledObjectName, namespace, cfg, stateManager)
+	consumer, err := m.createConsumer(ctx, scaledObjectName, namespace, cfg, stateManager, onBurst)
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +90,7 @@ func (m *ConsumerManager) createConsumer(
 	scaledObjectName, namespace string,
 	cfg *config.TriggerConfig,
 	stateManager *StateManager,
+	onBurst func(),
 ) (*Consumer, error) {
 	conn, err := amqp.Dial(cfg.AMQPURL())
 	if err != nil {
@@ -140,6 +143,7 @@ func (m *ConsumerManager) createConsumer(
 		namespace:        namespace,
 		queueName:        queueName,
 		stateManager:     stateManager,
+		onBurst:          onBurst,
 		logger:           m.logger.With("scaledObject", scaledObjectName, "namespace", namespace),
 		cancel:           cancel,
 		done:             make(chan struct{}),
@@ -199,6 +203,11 @@ func (c *Consumer) consume(ctx context.Context) {
 					c.logger.Error("failed to nack message", "error", nackErr)
 				}
 				continue
+			}
+
+			// Notify listeners for push-based scaling
+			if c.onBurst != nil {
+				c.onBurst()
 			}
 
 			// Ack the message

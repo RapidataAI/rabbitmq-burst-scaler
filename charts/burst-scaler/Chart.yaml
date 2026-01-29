@@ -2,8 +2,8 @@ apiVersion: v2
 name: rabbitmq-burst-scaler
 description: A KEDA external scaler for burst scaling based on RabbitMQ messages
 type: application
-version: 0.2.2
-appVersion: "0.2.2"
+version: 0.3.0
+appVersion: "0.3.0"
 keywords:
   - keda
   - rabbitmq

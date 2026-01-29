@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/rapidataai/rabbitmq-burst-scaler/internal/config"
 	"github.com/rapidataai/rabbitmq-burst-scaler/internal/rabbitmq"
@@ -23,6 +22,10 @@ type BurstScaler struct {
 	configs       map[string]*config.TriggerConfig // key: namespace/name
 	configMu      sync.RWMutex
 	logger        *slog.Logger
+
+	// Push notification channels per ScaledObject
+	notifyChans map[string][]chan struct{} // key: namespace/name
+	notifyMu    sync.RWMutex
 }
 
 // New creates a new BurstScaler.
@@ -31,6 +34,7 @@ func New(logger *slog.Logger) *BurstScaler {
 		consumers:     rabbitmq.NewConsumerManager(logger),
 		stateManagers: make(map[string]*rabbitmq.StateManager),
 		configs:       make(map[string]*config.TriggerConfig),
+		notifyChans:   make(map[string][]chan struct{}),
 		logger:        logger,
 	}
 }
@@ -38,6 +42,52 @@ func New(logger *slog.Logger) *BurstScaler {
 // scaledObjectKey returns the key for a ScaledObject.
 func scaledObjectKey(namespace, name string) string {
 	return fmt.Sprintf("%s/%s", namespace, name)
+}
+
+// NotifyBurst is called when a burst is triggered - notifies all listeners.
+func (s *BurstScaler) NotifyBurst(namespace, name string) {
+	key := scaledObjectKey(namespace, name)
+
+	s.notifyMu.RLock()
+	chans := s.notifyChans[key]
+	s.notifyMu.RUnlock()
+
+	for _, ch := range chans {
+		select {
+		case ch <- struct{}{}:
+		default:
+			// Channel full, skip (listener will catch up on next poll)
+		}
+	}
+}
+
+// subscribeToNotifications creates a channel for receiving burst notifications.
+func (s *BurstScaler) subscribeToNotifications(namespace, name string) chan struct{} {
+	key := scaledObjectKey(namespace, name)
+	ch := make(chan struct{}, 1)
+
+	s.notifyMu.Lock()
+	s.notifyChans[key] = append(s.notifyChans[key], ch)
+	s.notifyMu.Unlock()
+
+	return ch
+}
+
+// unsubscribeFromNotifications removes a notification channel.
+func (s *BurstScaler) unsubscribeFromNotifications(namespace, name string, ch chan struct{}) {
+	key := scaledObjectKey(namespace, name)
+
+	s.notifyMu.Lock()
+	defer s.notifyMu.Unlock()
+
+	chans := s.notifyChans[key]
+	for i, c := range chans {
+		if c == ch {
+			s.notifyChans[key] = append(chans[:i], chans[i+1:]...)
+			break
+		}
+	}
+	close(ch)
 }
 
 // getOrCreateStateManager returns an existing state manager or creates a new one.
@@ -90,7 +140,12 @@ func (s *BurstScaler) ensureConsumer(ctx context.Context, ref *pb.ScaledObjectRe
 		return nil, nil, fmt.Errorf("failed to get state manager: %w", err)
 	}
 
-	_, err = s.consumers.GetOrCreateConsumer(ctx, ref.Name, ref.Namespace, cfg, stateManager)
+	// Pass the notification callback to the consumer
+	onBurst := func() {
+		s.NotifyBurst(ref.Namespace, ref.Name)
+	}
+
+	_, err = s.consumers.GetOrCreateConsumer(ctx, ref.Name, ref.Namespace, cfg, stateManager, onBurst)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get or create consumer: %w", err)
 	}
@@ -179,7 +234,8 @@ func (s *BurstScaler) GetMetrics(ctx context.Context, req *pb.GetMetricsRequest)
 	}, nil
 }
 
-// StreamIsActive streams IsActive responses (for push-based scaling).
+// StreamIsActive streams IsActive responses (push-based scaling).
+// Immediately notifies KEDA when a burst is triggered.
 func (s *BurstScaler) StreamIsActive(ref *pb.ScaledObjectRef, stream pb.ExternalScaler_StreamIsActiveServer) error {
 	s.logger.Debug("StreamIsActive called", "name", ref.Name, "namespace", ref.Namespace)
 
@@ -191,18 +247,36 @@ func (s *BurstScaler) StreamIsActive(ref *pb.ScaledObjectRef, stream pb.External
 		return err
 	}
 
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+	// Subscribe to burst notifications for immediate push
+	notifyCh := s.subscribeToNotifications(ref.Namespace, ref.Name)
+	defer s.unsubscribeFromNotifications(ref.Namespace, ref.Name, notifyCh)
+
+	// Send initial state
+	active, err := stateManager.IsBurstActive(ctx, ref.Name, ref.Namespace)
+	if err != nil {
+		s.logger.Error("failed to check initial burst state", "error", err)
+	} else {
+		if err := stream.Send(&pb.IsActiveResponse{Result: active}); err != nil {
+			s.logger.Error("failed to send initial stream response", "error", err)
+			return err
+		}
+	}
+
+	s.logger.Info("StreamIsActive listening for push notifications", "name", ref.Name, "namespace", ref.Namespace)
 
 	for {
 		select {
 		case <-ctx.Done():
 			s.logger.Debug("StreamIsActive context done", "name", ref.Name, "namespace", ref.Namespace)
 			return nil
-		case <-ticker.C:
+
+		case <-notifyCh:
+			// Burst triggered - immediately notify KEDA
+			s.logger.Info("push notification: burst triggered", "name", ref.Name, "namespace", ref.Namespace)
+
 			active, err := stateManager.IsBurstActive(ctx, ref.Name, ref.Namespace)
 			if err != nil {
-				s.logger.Error("failed to check burst state in stream", "error", err)
+				s.logger.Error("failed to check burst state after notification", "error", err)
 				continue
 			}
 
@@ -230,6 +304,16 @@ func (s *BurstScaler) Close() error {
 	}
 	s.stateManagers = make(map[string]*rabbitmq.StateManager)
 	s.stateMu.Unlock()
+
+	// Close all notification channels
+	s.notifyMu.Lock()
+	for _, chans := range s.notifyChans {
+		for _, ch := range chans {
+			close(ch)
+		}
+	}
+	s.notifyChans = make(map[string][]chan struct{})
+	s.notifyMu.Unlock()
 
 	if len(errs) > 0 {
 		return fmt.Errorf("errors closing scaler: %v", errs)
