@@ -410,7 +410,7 @@ const file_proto_externalscaler_proto_rawDesc = "" +
 	"\x0eStreamIsActive\x12\x1f.externalscaler.ScaledObjectRef\x1a .externalscaler.IsActiveResponse\"\x000\x01\x12Y\n" +
 	"\rGetMetricSpec\x12\x1f.externalscaler.ScaledObjectRef\x1a%.externalscaler.GetMetricSpecResponse\"\x00\x12U\n" +
 	"\n" +
-	"GetMetrics\x12!.externalscaler.GetMetricsRequest\x1a\".externalscaler.GetMetricsResponse\"\x00B3Z1github.com/jorgelopez/rabbitmq-burst-scaler/protob\x06proto3"
+	"GetMetrics\x12!.externalscaler.GetMetricsRequest\x1a\".externalscaler.GetMetricsResponse\"\x00B3Z1github.com/rapidataai/rabbitmq-burst-scaler/protob\x06proto3"
 
 var (
 	file_proto_externalscaler_proto_rawDescOnce sync.Once

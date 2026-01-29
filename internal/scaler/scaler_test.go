@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	pb "github.com/jorgelopez/rabbitmq-burst-scaler/proto"
+	pb "github.com/rapidataai/rabbitmq-burst-scaler/proto"
 )
 
 func TestScaledObjectKey(t *testing.T) {
@@ -33,7 +33,7 @@ func TestScaledObjectKey(t *testing.T) {
 func TestBurstScalerValidation(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 	s := New(logger)
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 
 	ctx := context.Background()
 

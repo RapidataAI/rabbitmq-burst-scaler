@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jorgelopez/rabbitmq-burst-scaler/internal/config"
-	"github.com/jorgelopez/rabbitmq-burst-scaler/internal/rabbitmq"
-	pb "github.com/jorgelopez/rabbitmq-burst-scaler/proto"
+	"github.com/rapidataai/rabbitmq-burst-scaler/internal/config"
+	"github.com/rapidataai/rabbitmq-burst-scaler/internal/rabbitmq"
+	pb "github.com/rapidataai/rabbitmq-burst-scaler/proto"
 )
 
 const metricName = "burst_replicas"
@@ -41,7 +41,7 @@ func scaledObjectKey(namespace, name string) string {
 }
 
 // getOrCreateStateManager returns an existing state manager or creates a new one.
-func (s *BurstScaler) getOrCreateStateManager(ctx context.Context, amqpURL string) (*rabbitmq.StateManager, error) {
+func (s *BurstScaler) getOrCreateStateManager(amqpURL string) (*rabbitmq.StateManager, error) {
 	s.stateMu.RLock()
 	if sm, ok := s.stateManagers[amqpURL]; ok {
 		s.stateMu.RUnlock()
@@ -66,14 +66,6 @@ func (s *BurstScaler) getOrCreateStateManager(ctx context.Context, amqpURL strin
 	return sm, nil
 }
 
-// getConfig returns the cached config for a ScaledObject.
-func (s *BurstScaler) getConfig(namespace, name string) (*config.TriggerConfig, bool) {
-	s.configMu.RLock()
-	defer s.configMu.RUnlock()
-	cfg, ok := s.configs[scaledObjectKey(namespace, name)]
-	return cfg, ok
-}
-
 // setConfig caches the config for a ScaledObject.
 func (s *BurstScaler) setConfig(namespace, name string, cfg *config.TriggerConfig) {
 	s.configMu.Lock()
@@ -93,7 +85,7 @@ func (s *BurstScaler) ensureConsumer(ctx context.Context, ref *pb.ScaledObjectRe
 
 	amqpURL := cfg.AMQPURL()
 
-	stateManager, err := s.getOrCreateStateManager(ctx, amqpURL)
+	stateManager, err := s.getOrCreateStateManager(amqpURL)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get state manager: %w", err)
 	}

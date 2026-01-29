@@ -8,7 +8,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
-	"github.com/jorgelopez/rabbitmq-burst-scaler/internal/config"
+	"github.com/rapidataai/rabbitmq-burst-scaler/internal/config"
 )
 
 // Consumer represents a RabbitMQ consumer for a specific ScaledObject.
@@ -96,7 +96,7 @@ func (m *ConsumerManager) createConsumer(
 
 	ch, err := conn.Channel()
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to open channel: %w", err)
 	}
 
@@ -112,8 +112,8 @@ func (m *ConsumerManager) createConsumer(
 		nil,
 	)
 	if err != nil {
-		ch.Close()
-		conn.Close()
+		_ = ch.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to declare source queue: %w", err)
 	}
 
@@ -126,8 +126,8 @@ func (m *ConsumerManager) createConsumer(
 		nil,
 	)
 	if err != nil {
-		ch.Close()
-		conn.Close()
+		_ = ch.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to bind queue to exchange: %w", err)
 	}
 
@@ -147,7 +147,7 @@ func (m *ConsumerManager) createConsumer(
 
 	// Ensure state queue exists
 	if err := stateManager.EnsureStateQueue(ctx, scaledObjectName, namespace, cfg.BurstDurationMinutes); err != nil {
-		consumer.Close()
+		_ = consumer.Close()
 		return nil, fmt.Errorf("failed to ensure state queue: %w", err)
 	}
 
@@ -195,12 +195,16 @@ func (c *Consumer) consume(ctx context.Context) {
 			if err := c.stateManager.TriggerBurst(ctx, c.scaledObjectName, c.namespace); err != nil {
 				c.logger.Error("failed to trigger burst", "error", err)
 				// Nack and requeue
-				delivery.Nack(false, true)
+				if nackErr := delivery.Nack(false, true); nackErr != nil {
+					c.logger.Error("failed to nack message", "error", nackErr)
+				}
 				continue
 			}
 
 			// Ack the message
-			delivery.Ack(false)
+			if ackErr := delivery.Ack(false); ackErr != nil {
+				c.logger.Error("failed to ack message", "error", ackErr)
+			}
 		}
 	}
 }

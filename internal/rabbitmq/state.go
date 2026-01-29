@@ -2,6 +2,7 @@ package rabbitmq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -27,7 +28,7 @@ func NewStateManager(amqpURL string, logger *slog.Logger) (*StateManager, error)
 
 	ch, err := conn.Channel()
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to open channel: %w", err)
 	}
 
@@ -108,10 +109,18 @@ func (s *StateManager) IsBurstActive(ctx context.Context, scaledObjectName, name
 
 	queueName := stateQueueName(scaledObjectName, namespace)
 
-	queue, err := s.channel.QueueInspect(queueName)
+	queue, err := s.channel.QueueDeclarePassive(
+		queueName,
+		true,  // durable
+		false, // autoDelete
+		false, // exclusive
+		false, // noWait
+		nil,
+	)
 	if err != nil {
 		// Queue doesn't exist means no burst active
-		if amqpErr, ok := err.(*amqp.Error); ok && amqpErr.Code == amqp.NotFound {
+		var amqpErr *amqp.Error
+		if ok := errors.As(err, &amqpErr); ok && amqpErr.Code == amqp.NotFound {
 			return false, nil
 		}
 		return false, fmt.Errorf("failed to inspect state queue: %w", err)
@@ -132,7 +141,8 @@ func (s *StateManager) DeleteStateQueue(ctx context.Context, scaledObjectName, n
 	_, err := s.channel.QueueDelete(queueName, false, false, false)
 	if err != nil {
 		// Ignore if queue doesn't exist
-		if amqpErr, ok := err.(*amqp.Error); ok && amqpErr.Code == amqp.NotFound {
+		var amqpErr *amqp.Error
+		if ok := errors.As(err, &amqpErr); ok && amqpErr.Code == amqp.NotFound {
 			return nil
 		}
 		return fmt.Errorf("failed to delete state queue: %w", err)
@@ -148,7 +158,7 @@ func (s *StateManager) Close() error {
 	defer s.mu.Unlock()
 
 	if s.channel != nil {
-		s.channel.Close()
+		_ = s.channel.Close()
 	}
 	if s.conn != nil {
 		return s.conn.Close()

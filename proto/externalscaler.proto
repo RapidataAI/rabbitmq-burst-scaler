@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package externalscaler;
 
-option go_package = "github.com/jorgelopez/rabbitmq-burst-scaler/proto";
+option go_package = "github.com/rapidataai/rabbitmq-burst-scaler/proto";
 
 service ExternalScaler {
     rpc IsActive(ScaledObjectRef) returns (IsActiveResponse) {}

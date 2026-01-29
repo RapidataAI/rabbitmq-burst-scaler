@@ -1,4 +1,4 @@
-module github.com/jorgelopez/rabbitmq-burst-scaler
+module github.com/rapidataai/rabbitmq-burst-scaler
 
 go 1.24.0
 

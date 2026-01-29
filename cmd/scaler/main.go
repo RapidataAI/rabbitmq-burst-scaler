@@ -13,8 +13,8 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
-	"github.com/jorgelopez/rabbitmq-burst-scaler/internal/scaler"
-	pb "github.com/jorgelopez/rabbitmq-burst-scaler/proto"
+	"github.com/rapidataai/rabbitmq-burst-scaler/internal/scaler"
+	pb "github.com/rapidataai/rabbitmq-burst-scaler/proto"
 )
 
 func main() {
