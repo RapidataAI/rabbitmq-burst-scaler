@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 )
 
 // TriggerConfig holds the configuration parsed from ScaledObject trigger metadata.
@@ -20,8 +21,8 @@ type TriggerConfig struct {
 	RoutingKey string
 
 	// Burst configuration
-	BurstReplicas        int
-	BurstDurationMinutes int
+	BurstReplicas int
+	BurstDuration time.Duration
 }
 
 // ParseTriggerMetadata parses the trigger metadata from a ScaledObject into TriggerConfig.
@@ -59,18 +60,18 @@ func ParseTriggerMetadata(metadata map[string]string) (*TriggerConfig, error) {
 	}
 	config.BurstReplicas = burstReplicas
 
-	burstDurationStr, ok := metadata["burstDurationMinutes"]
+	burstDurationStr, ok := metadata["burstDuration"]
 	if !ok || burstDurationStr == "" {
-		return nil, errors.New("burstDurationMinutes is required")
+		return nil, errors.New("burstDuration is required")
 	}
-	burstDuration, err := strconv.Atoi(burstDurationStr)
+	burstDuration, err := time.ParseDuration(burstDurationStr)
 	if err != nil {
-		return nil, fmt.Errorf("burstDurationMinutes must be a valid integer: %w", err)
+		return nil, fmt.Errorf("burstDuration must be a valid duration (e.g., '2m', '30s', '1h'): %w", err)
 	}
-	if burstDuration < 1 {
-		return nil, errors.New("burstDurationMinutes must be at least 1")
+	if burstDuration < time.Second {
+		return nil, errors.New("burstDuration must be at least 1s")
 	}
-	config.BurstDurationMinutes = burstDuration
+	config.BurstDuration = burstDuration
 
 	// Optional fields
 	if port, ok := metadata["port"]; ok && port != "" {

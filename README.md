@@ -1,6 +1,6 @@
 # RabbitMQ Burst Scaler
 
-A KEDA external scaler that scales services to X replicas for Y minutes when a RabbitMQ message is received.
+A KEDA external scaler that scales services to X replicas for Y duration when a RabbitMQ message is received.
 
 ## Overview
 
@@ -9,14 +9,14 @@ This scaler enables "burst scaling" - when a message arrives on a configured Rab
 **Important**: This is a single shared service that handles multiple ScaledObjects. You deploy it once, then create ScaledObjects for each service you want to scale.
 
 ```
-┌─────────────────────────────────────────────────────┐
-│      One Burst Scaler (keda-system namespace)       │
-│                                                     │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐   │
-│  │ Consumer    │ │ Consumer    │ │ Consumer    │   │
-│  │ order-svc   │ │ campaign-svc│ │ payment-svc │   │
-│  └─────────────┘ └─────────────┘ └─────────────┘   │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│      One Burst Scaler (keda-system namespace)               │
+│                                                             │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
+│  │ Consumer    │ │ Consumer    │ │ Consumer    │           │
+│  │ order-svc   │ │ campaign-svc│ │ payment-svc │           │
+│  └─────────────┘ └─────────────┘ └─────────────┘           │
+└─────────────────────────────────────────────────────────────┘
          ▲                ▲                ▲
          │                │                │
     ScaledObject    ScaledObject    ScaledObject
@@ -25,6 +25,7 @@ This scaler enables "burst scaling" - when a message arrives on a configured Rab
 
 ### Key Features
 
+- **Push-based scaling**: Uses KEDA's `external-push` trigger for immediate scaling when messages arrive
 - **Configuration in ScaledObject**: No separate CRD needed - all config lives in KEDA's ScaledObject trigger metadata
 - **State persistence**: Uses RabbitMQ queues with TTL to survive scaler restarts
 - **Timer reset**: Each new message resets the burst duration countdown
@@ -35,7 +36,8 @@ This scaler enables "burst scaling" - when a message arrives on a configured Rab
 1. KEDA calls the scaler with trigger metadata from the ScaledObject
 2. Scaler creates a per-ScaledObject consumer bound to the specified exchange/routing key
 3. When a message arrives, the scaler publishes a "burst marker" to a state queue with TTL
-4. On `GetMetrics` calls, the scaler checks if a marker exists and returns the target replica count
+4. The scaler immediately notifies KEDA via the `StreamIsActive` gRPC stream (push-based)
+5. On `GetMetrics` calls, the scaler checks if a marker exists and returns the target replica count
 
 ## Installation
 
@@ -51,9 +53,9 @@ This scaler enables "burst scaling" - when a message arrives on a configured Rab
 resource "helm_release" "rabbitmq_burst_scaler" {
   name       = "rabbitmq-burst-scaler"
   namespace  = "keda-system"
-  repository = "https://your-org.github.io/rabbitmq-burst-scaler"  # or use local chart
+  repository = "https://your-org.github.io/rabbitmq-burst-scaler"
   chart      = "rabbitmq-burst-scaler"
-  version    = "0.1.0"
+  version    = "0.3.0"
 
   set {
     name  = "image.repository"
@@ -72,7 +74,8 @@ resource "helm_release" "rabbitmq_burst_scaler" {
 ### Option 2: Helm Chart directly
 
 ```bash
-helm install rabbitmq-burst-scaler ./charts/burst-scaler \
+helm repo add rabbitmq-burst-scaler https://your-org.github.io/rabbitmq-burst-scaler
+helm install rabbitmq-burst-scaler rabbitmq-burst-scaler/rabbitmq-burst-scaler \
   --namespace keda-system \
   --set image.repository=ghcr.io/your-org/rabbitmq-burst-scaler \
   --set image.tag=v1.0.0
@@ -114,14 +117,14 @@ spec:
   minReplicaCount: 0
   maxReplicaCount: 10
   triggers:
-  - type: external
+  - type: external-push
     metadata:
       scalerAddress: "rabbitmq-burst-scaler.keda-system:9090"
       host: "rabbitmq.default"
       exchange: "events"
       routingKey: "orders.created"
       burstReplicas: "5"
-      burstDurationMinutes: "2"
+      burstDuration: "2m"
     authenticationRef:
       name: rabbitmq-auth
 ```
@@ -154,7 +157,27 @@ spec:
 | `exchange` | Yes | Exchange to bind the consumer to | - |
 | `routingKey` | Yes | Routing key to listen for | - |
 | `burstReplicas` | Yes | Number of replicas to scale to | - |
-| `burstDurationMinutes` | Yes | Duration to maintain burst replicas | - |
+| `burstDuration` | Yes | Duration to maintain burst replicas (e.g., "30s", "2m", "1h") | - |
+
+### Duration Format
+
+The `burstDuration` parameter accepts standard Go duration strings:
+- `30s` - 30 seconds
+- `2m` - 2 minutes
+- `1h` - 1 hour
+- `1h30m` - 1 hour and 30 minutes
+
+Minimum value is `1s`.
+
+### burstDuration vs cooldownPeriod
+
+- **burstDuration**: How long the scaler returns the burst replica count after receiving a message. Each new message resets this timer.
+- **cooldownPeriod**: KEDA's built-in setting for how long to wait after metrics drop to 0 before scaling to minReplicaCount.
+
+Example: With `burstDuration: "2m"` and `cooldownPeriod: 30`:
+1. Message arrives → scaler returns 5 replicas
+2. 2 minutes pass with no messages → scaler returns 0 replicas
+3. 30 more seconds pass → KEDA scales to minReplicaCount
 
 ## Development
 
@@ -186,10 +209,20 @@ go run ./cmd/scaler
 
 The burst state is persisted in RabbitMQ using a state queue per ScaledObject:
 - Queue name: `burst-state-{namespace}-{scaledObjectName}`
-- Configuration: `max-length=1`, `x-message-ttl=Y*60*1000`
+- Configuration: `max-length=1`, `x-message-ttl=duration_in_ms`
 - New messages replace old ones (drop-head overflow)
 
 This ensures state survives scaler restarts and each new message resets the timer.
+
+### Push-based Scaling
+
+This scaler uses KEDA's `external-push` trigger type, which enables immediate notification when a burst should occur:
+
+1. When a message arrives on RabbitMQ, the consumer triggers a burst
+2. The scaler immediately notifies all connected KEDA instances via the `StreamIsActive` gRPC stream
+3. KEDA then calls `GetMetrics` to get the actual replica count
+
+This provides faster scaling response compared to polling-based triggers.
 
 ## License
 

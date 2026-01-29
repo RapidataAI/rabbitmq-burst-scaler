@@ -92,6 +92,17 @@ func (m *ConsumerManager) createConsumer(
 	stateManager *StateManager,
 	onBurst func(),
 ) (*Consumer, error) {
+	m.logger.Info("creating consumer with config",
+		"host", cfg.Host,
+		"port", cfg.Port,
+		"vhost", cfg.Vhost,
+		"username", cfg.Username,
+		"exchange", cfg.Exchange,
+		"routingKey", cfg.RoutingKey,
+		"burstReplicas", cfg.BurstReplicas,
+		"burstDuration", cfg.BurstDuration,
+	)
+
 	conn, err := amqp.Dial(cfg.AMQPURL())
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
@@ -150,7 +161,7 @@ func (m *ConsumerManager) createConsumer(
 	}
 
 	// Ensure state queue exists
-	if err := stateManager.EnsureStateQueue(ctx, scaledObjectName, namespace, cfg.BurstDurationMinutes); err != nil {
+	if err := stateManager.EnsureStateQueue(ctx, scaledObjectName, namespace, cfg.BurstDuration); err != nil {
 		_ = consumer.Close()
 		return nil, fmt.Errorf("failed to ensure state queue: %w", err)
 	}

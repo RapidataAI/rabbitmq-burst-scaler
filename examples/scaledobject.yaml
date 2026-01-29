@@ -18,7 +18,7 @@ spec:
   minReplicaCount: 0                      # Minimum replicas (can be 0 for scale-to-zero)
   maxReplicaCount: 10                     # Maximum replicas
   triggers:
-  - type: external
+  - type: external-push
     metadata:
       scalerAddress: "rabbitmq-burst-scaler.keda-system:9090"  # Address of the burst scaler
       # RabbitMQ connection
@@ -30,7 +30,7 @@ spec:
       routingKey: "jobs.created"          # Routing key to listen for
       # Burst configuration
       burstReplicas: "5"                  # Scale to this many replicas
-      burstDurationMinutes: "2"           # Keep replicas for this many minutes
+      burstDuration: "2m"                 # Keep replicas for this duration (e.g., "30s", "2m", "1h")
     # Use TriggerAuthentication for credentials
     authenticationRef:
       name: rabbitmq-auth

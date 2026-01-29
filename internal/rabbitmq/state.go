@@ -45,15 +45,15 @@ func stateQueueName(scaledObjectName, namespace string) string {
 }
 
 // EnsureStateQueue creates or updates the state queue with the specified TTL.
-func (s *StateManager) EnsureStateQueue(ctx context.Context, scaledObjectName, namespace string, ttlMinutes int) error {
+func (s *StateManager) EnsureStateQueue(ctx context.Context, scaledObjectName, namespace string, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	queueName := stateQueueName(scaledObjectName, namespace)
-	ttlMs := ttlMinutes * 60 * 1000
+	ttlMs := int32(ttl.Milliseconds())
 
 	args := amqp.Table{
-		"x-message-ttl": int32(ttlMs),
+		"x-message-ttl": ttlMs,
 		"x-max-length":  int32(1),
 		"x-overflow":    "drop-head",
 	}
@@ -70,7 +70,7 @@ func (s *StateManager) EnsureStateQueue(ctx context.Context, scaledObjectName, n
 		return fmt.Errorf("failed to declare state queue: %w", err)
 	}
 
-	s.logger.Debug("ensured state queue", "queue", queueName, "ttl_minutes", ttlMinutes)
+	s.logger.Debug("ensured state queue", "queue", queueName, "ttl", ttl)
 	return nil
 }
 

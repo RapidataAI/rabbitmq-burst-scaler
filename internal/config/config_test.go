@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 )
 
 func TestParseTriggerMetadata(t *testing.T) {
@@ -15,11 +16,11 @@ func TestParseTriggerMetadata(t *testing.T) {
 		{
 			name: "valid minimal config",
 			metadata: map[string]string{
-				"host":                 "rabbitmq.default",
-				"exchange":             "events",
-				"routingKey":           "jobs.created",
-				"burstReplicas":        "5",
-				"burstDurationMinutes": "2",
+				"host":          "rabbitmq.default",
+				"exchange":      "events",
+				"routingKey":    "jobs.created",
+				"burstReplicas": "5",
+				"burstDuration": "2m",
 			},
 			wantErr: false,
 			validate: func(t *testing.T, cfg *TriggerConfig) {
@@ -41,23 +42,23 @@ func TestParseTriggerMetadata(t *testing.T) {
 				if cfg.BurstReplicas != 5 {
 					t.Errorf("expected burstReplicas 5, got %d", cfg.BurstReplicas)
 				}
-				if cfg.BurstDurationMinutes != 2 {
-					t.Errorf("expected burstDurationMinutes 2, got %d", cfg.BurstDurationMinutes)
+				if cfg.BurstDuration != 2*time.Minute {
+					t.Errorf("expected burstDuration 2m, got %v", cfg.BurstDuration)
 				}
 			},
 		},
 		{
 			name: "valid full config",
 			metadata: map[string]string{
-				"host":                 "rabbitmq.default",
-				"port":                 "5673",
-				"username":             "guest",
-				"password":             "secret",
-				"vhost":                "myapp",
-				"exchange":             "events",
-				"routingKey":           "jobs.created",
-				"burstReplicas":        "10",
-				"burstDurationMinutes": "5",
+				"host":          "rabbitmq.default",
+				"port":          "5673",
+				"username":      "guest",
+				"password":      "secret",
+				"vhost":         "myapp",
+				"exchange":      "events",
+				"routingKey":    "jobs.created",
+				"burstReplicas": "10",
+				"burstDuration": "5m",
 			},
 			wantErr: false,
 			validate: func(t *testing.T, cfg *TriggerConfig) {
@@ -76,18 +77,67 @@ func TestParseTriggerMetadata(t *testing.T) {
 				if cfg.BurstReplicas != 10 {
 					t.Errorf("expected burstReplicas 10, got %d", cfg.BurstReplicas)
 				}
-				if cfg.BurstDurationMinutes != 5 {
-					t.Errorf("expected burstDurationMinutes 5, got %d", cfg.BurstDurationMinutes)
+				if cfg.BurstDuration != 5*time.Minute {
+					t.Errorf("expected burstDuration 5m, got %v", cfg.BurstDuration)
+				}
+			},
+		},
+		{
+			name: "valid config with seconds",
+			metadata: map[string]string{
+				"host":          "rabbitmq.default",
+				"exchange":      "events",
+				"routingKey":    "jobs.created",
+				"burstReplicas": "5",
+				"burstDuration": "30s",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, cfg *TriggerConfig) {
+				if cfg.BurstDuration != 30*time.Second {
+					t.Errorf("expected burstDuration 30s, got %v", cfg.BurstDuration)
+				}
+			},
+		},
+		{
+			name: "valid config with hours",
+			metadata: map[string]string{
+				"host":          "rabbitmq.default",
+				"exchange":      "events",
+				"routingKey":    "jobs.created",
+				"burstReplicas": "5",
+				"burstDuration": "1h",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, cfg *TriggerConfig) {
+				if cfg.BurstDuration != time.Hour {
+					t.Errorf("expected burstDuration 1h, got %v", cfg.BurstDuration)
+				}
+			},
+		},
+		{
+			name: "valid config with combined duration",
+			metadata: map[string]string{
+				"host":          "rabbitmq.default",
+				"exchange":      "events",
+				"routingKey":    "jobs.created",
+				"burstReplicas": "5",
+				"burstDuration": "1h30m",
+			},
+			wantErr: false,
+			validate: func(t *testing.T, cfg *TriggerConfig) {
+				expected := time.Hour + 30*time.Minute
+				if cfg.BurstDuration != expected {
+					t.Errorf("expected burstDuration 1h30m, got %v", cfg.BurstDuration)
 				}
 			},
 		},
 		{
 			name: "missing host",
 			metadata: map[string]string{
-				"exchange":             "events",
-				"routingKey":           "jobs.created",
-				"burstReplicas":        "5",
-				"burstDurationMinutes": "2",
+				"exchange":      "events",
+				"routingKey":    "jobs.created",
+				"burstReplicas": "5",
+				"burstDuration": "2m",
 			},
 			wantErr:   true,
 			errString: "host is required",
@@ -95,10 +145,10 @@ func TestParseTriggerMetadata(t *testing.T) {
 		{
 			name: "missing exchange",
 			metadata: map[string]string{
-				"host":                 "rabbitmq.default",
-				"routingKey":           "jobs.created",
-				"burstReplicas":        "5",
-				"burstDurationMinutes": "2",
+				"host":          "rabbitmq.default",
+				"routingKey":    "jobs.created",
+				"burstReplicas": "5",
+				"burstDuration": "2m",
 			},
 			wantErr:   true,
 			errString: "exchange is required",
@@ -106,10 +156,10 @@ func TestParseTriggerMetadata(t *testing.T) {
 		{
 			name: "missing routingKey",
 			metadata: map[string]string{
-				"host":                 "rabbitmq.default",
-				"exchange":             "events",
-				"burstReplicas":        "5",
-				"burstDurationMinutes": "2",
+				"host":          "rabbitmq.default",
+				"exchange":      "events",
+				"burstReplicas": "5",
+				"burstDuration": "2m",
 			},
 			wantErr:   true,
 			errString: "routingKey is required",
@@ -117,16 +167,16 @@ func TestParseTriggerMetadata(t *testing.T) {
 		{
 			name: "missing burstReplicas",
 			metadata: map[string]string{
-				"host":                 "rabbitmq.default",
-				"exchange":             "events",
-				"routingKey":           "jobs.created",
-				"burstDurationMinutes": "2",
+				"host":          "rabbitmq.default",
+				"exchange":      "events",
+				"routingKey":    "jobs.created",
+				"burstDuration": "2m",
 			},
 			wantErr:   true,
 			errString: "burstReplicas is required",
 		},
 		{
-			name: "missing burstDurationMinutes",
+			name: "missing burstDuration",
 			metadata: map[string]string{
 				"host":          "rabbitmq.default",
 				"exchange":      "events",
@@ -134,16 +184,16 @@ func TestParseTriggerMetadata(t *testing.T) {
 				"burstReplicas": "5",
 			},
 			wantErr:   true,
-			errString: "burstDurationMinutes is required",
+			errString: "burstDuration is required",
 		},
 		{
 			name: "invalid burstReplicas",
 			metadata: map[string]string{
-				"host":                 "rabbitmq.default",
-				"exchange":             "events",
-				"routingKey":           "jobs.created",
-				"burstReplicas":        "invalid",
-				"burstDurationMinutes": "2",
+				"host":          "rabbitmq.default",
+				"exchange":      "events",
+				"routingKey":    "jobs.created",
+				"burstReplicas": "invalid",
+				"burstDuration": "2m",
 			},
 			wantErr:   true,
 			errString: "burstReplicas must be a valid integer",
@@ -151,48 +201,48 @@ func TestParseTriggerMetadata(t *testing.T) {
 		{
 			name: "zero burstReplicas",
 			metadata: map[string]string{
-				"host":                 "rabbitmq.default",
-				"exchange":             "events",
-				"routingKey":           "jobs.created",
-				"burstReplicas":        "0",
-				"burstDurationMinutes": "2",
+				"host":          "rabbitmq.default",
+				"exchange":      "events",
+				"routingKey":    "jobs.created",
+				"burstReplicas": "0",
+				"burstDuration": "2m",
 			},
 			wantErr:   true,
 			errString: "burstReplicas must be at least 1",
 		},
 		{
-			name: "invalid burstDurationMinutes",
+			name: "invalid burstDuration",
 			metadata: map[string]string{
-				"host":                 "rabbitmq.default",
-				"exchange":             "events",
-				"routingKey":           "jobs.created",
-				"burstReplicas":        "5",
-				"burstDurationMinutes": "invalid",
+				"host":          "rabbitmq.default",
+				"exchange":      "events",
+				"routingKey":    "jobs.created",
+				"burstReplicas": "5",
+				"burstDuration": "invalid",
 			},
 			wantErr:   true,
-			errString: "burstDurationMinutes must be a valid integer",
+			errString: "burstDuration must be a valid duration",
 		},
 		{
-			name: "zero burstDurationMinutes",
+			name: "burstDuration too short",
 			metadata: map[string]string{
-				"host":                 "rabbitmq.default",
-				"exchange":             "events",
-				"routingKey":           "jobs.created",
-				"burstReplicas":        "5",
-				"burstDurationMinutes": "0",
+				"host":          "rabbitmq.default",
+				"exchange":      "events",
+				"routingKey":    "jobs.created",
+				"burstReplicas": "5",
+				"burstDuration": "500ms",
 			},
 			wantErr:   true,
-			errString: "burstDurationMinutes must be at least 1",
+			errString: "burstDuration must be at least 1s",
 		},
 		{
 			name: "invalid port",
 			metadata: map[string]string{
-				"host":                 "rabbitmq.default",
-				"port":                 "invalid",
-				"exchange":             "events",
-				"routingKey":           "jobs.created",
-				"burstReplicas":        "5",
-				"burstDurationMinutes": "2",
+				"host":          "rabbitmq.default",
+				"port":          "invalid",
+				"exchange":      "events",
+				"routingKey":    "jobs.created",
+				"burstReplicas": "5",
+				"burstDuration": "2m",
 			},
 			wantErr:   true,
 			errString: "port must be a valid integer",
