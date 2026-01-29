@@ -92,17 +92,6 @@ func (m *ConsumerManager) createConsumer(
 	stateManager *StateManager,
 	onBurst func(),
 ) (*Consumer, error) {
-	m.logger.Info("creating consumer with config",
-		"host", cfg.Host,
-		"port", cfg.Port,
-		"vhost", cfg.Vhost,
-		"username", cfg.Username,
-		"exchange", cfg.Exchange,
-		"routingKey", cfg.RoutingKey,
-		"burstReplicas", cfg.BurstReplicas,
-		"burstDuration", cfg.BurstDuration,
-	)
-
 	conn, err := amqp.Dial(cfg.AMQPURL())
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
