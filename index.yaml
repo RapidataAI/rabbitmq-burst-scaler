@@ -2,6 +2,21 @@ apiVersion: v1
 entries:
   rabbitmq-burst-scaler:
   - apiVersion: v2
+    appVersion: 0.2.2
+    created: "2026-01-29T10:29:51.685985728Z"
+    description: A KEDA external scaler for burst scaling based on RabbitMQ messages
+    digest: 3be0522d74706bbfb0f64ba2dcef7cf829cb3bd4005a3dce63bdf3bbad169440
+    keywords:
+    - keda
+    - rabbitmq
+    - autoscaling
+    - kubernetes
+    name: rabbitmq-burst-scaler
+    type: application
+    urls:
+    - https://github.com/RapidataAI/rabbitmq-burst-scaler/releases/download/rabbitmq-burst-scaler-0.2.2/rabbitmq-burst-scaler-0.2.2.tgz
+    version: 0.2.2
+  - apiVersion: v2
     appVersion: 0.2.1
     created: "2026-01-29T10:24:26.267982607Z"
     description: A KEDA external scaler for burst scaling based on RabbitMQ messages
@@ -16,4 +31,4 @@ entries:
     urls:
     - https://github.com/RapidataAI/rabbitmq-burst-scaler/releases/download/rabbitmq-burst-scaler-0.2.1/rabbitmq-burst-scaler-0.2.1.tgz
     version: 0.2.1
-generated: "2026-01-29T10:24:26.267989019Z"
+generated: "2026-01-29T10:29:51.685993442Z"
