@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 // StateManager manages burst state queues with TTL.
 type StateManager struct {
+	amqpURL string
 	conn    *amqp.Connection
 	channel *amqp.Channel
 	mu      sync.Mutex
@@ -21,22 +23,68 @@ type StateManager struct {
 
 // NewStateManager creates a new state manager connected to RabbitMQ.
 func NewStateManager(amqpURL string, logger *slog.Logger) (*StateManager, error) {
-	conn, err := amqp.Dial(amqpURL)
+	s := &StateManager{
+		amqpURL: amqpURL,
+		logger:  logger,
+	}
+
+	if err := s.connect(); err != nil {
+		return nil, err
+	}
+
+	return s, nil
+}
+
+// connect establishes a connection and channel to RabbitMQ.
+func (s *StateManager) connect() error {
+	conn, err := amqp.Dial(s.amqpURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+		return fmt.Errorf("failed to connect to RabbitMQ: %w", err)
 	}
 
 	ch, err := conn.Channel()
 	if err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("failed to open channel: %w", err)
+		return fmt.Errorf("failed to open channel: %w", err)
 	}
 
-	return &StateManager{
-		conn:    conn,
-		channel: ch,
-		logger:  logger,
-	}, nil
+	s.conn = conn
+	s.channel = ch
+	s.logger.Info("connected to RabbitMQ")
+	return nil
+}
+
+// reconnect closes any existing connection and establishes a new one.
+func (s *StateManager) reconnect() error {
+	if s.channel != nil {
+		_ = s.channel.Close()
+		s.channel = nil
+	}
+	if s.conn != nil {
+		_ = s.conn.Close()
+		s.conn = nil
+	}
+
+	s.logger.Info("reconnecting to RabbitMQ")
+	return s.connect()
+}
+
+// isConnectionError checks if the error indicates a closed connection/channel.
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var amqpErr *amqp.Error
+	if errors.As(err, &amqpErr) {
+		// Channel/connection closed errors
+		return amqpErr.Code == amqp.ChannelError || amqpErr.Code == amqp.ConnectionForced
+	}
+	// Check for common connection error messages
+	errStr := err.Error()
+	return errors.Is(err, amqp.ErrClosed) ||
+		strings.Contains(errStr, "channel/connection is not open") ||
+		strings.Contains(errStr, "connection closed") ||
+		strings.Contains(errStr, "EOF")
 }
 
 // stateQueueName returns the name of the state queue for a ScaledObject.
@@ -67,7 +115,25 @@ func (s *StateManager) EnsureStateQueue(ctx context.Context, scaledObjectName, n
 		args,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to declare state queue: %w", err)
+		if isConnectionError(err) {
+			s.logger.Warn("connection error, attempting reconnect", "error", err)
+			if reconnErr := s.reconnect(); reconnErr != nil {
+				return fmt.Errorf("failed to reconnect: %w (original error: %v)", reconnErr, err)
+			}
+			_, err = s.channel.QueueDeclare(
+				queueName,
+				true,
+				false,
+				false,
+				false,
+				args,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to declare state queue after reconnect: %w", err)
+			}
+		} else {
+			return fmt.Errorf("failed to declare state queue: %w", err)
+		}
 	}
 
 	s.logger.Debug("ensured state queue", "queue", queueName, "ttl", ttl)
@@ -82,20 +148,40 @@ func (s *StateManager) TriggerBurst(ctx context.Context, scaledObjectName, names
 
 	queueName := stateQueueName(scaledObjectName, namespace)
 
+	publishing := amqp.Publishing{
+		ContentType:  "text/plain",
+		Body:         []byte(time.Now().UTC().Format(time.RFC3339)),
+		DeliveryMode: amqp.Persistent,
+	}
+
 	err := s.channel.PublishWithContext(
 		ctx,
 		"",        // default exchange
 		queueName, // routing key = queue name
 		false,     // mandatory
 		false,     // immediate
-		amqp.Publishing{
-			ContentType:  "text/plain",
-			Body:         []byte(time.Now().UTC().Format(time.RFC3339)),
-			DeliveryMode: amqp.Persistent,
-		},
+		publishing,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to publish burst marker: %w", err)
+		if isConnectionError(err) {
+			s.logger.Warn("connection error, attempting reconnect", "error", err)
+			if reconnErr := s.reconnect(); reconnErr != nil {
+				return fmt.Errorf("failed to reconnect: %w (original error: %v)", reconnErr, err)
+			}
+			err = s.channel.PublishWithContext(
+				ctx,
+				"",
+				queueName,
+				false,
+				false,
+				publishing,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to publish burst marker after reconnect: %w", err)
+			}
+		} else {
+			return fmt.Errorf("failed to publish burst marker: %w", err)
+		}
 	}
 
 	s.logger.Info("triggered burst", "scaledObject", scaledObjectName, "namespace", namespace)
@@ -123,7 +209,32 @@ func (s *StateManager) IsBurstActive(ctx context.Context, scaledObjectName, name
 		if ok := errors.As(err, &amqpErr); ok && amqpErr.Code == amqp.NotFound {
 			return false, nil
 		}
-		return false, fmt.Errorf("failed to inspect state queue: %w", err)
+
+		// Try to reconnect on connection errors
+		if isConnectionError(err) {
+			s.logger.Warn("connection error, attempting reconnect", "error", err)
+			if reconnErr := s.reconnect(); reconnErr != nil {
+				return false, fmt.Errorf("failed to reconnect: %w (original error: %v)", reconnErr, err)
+			}
+			// Retry the operation after reconnection
+			queue, err = s.channel.QueueDeclarePassive(
+				queueName,
+				true,
+				false,
+				false,
+				false,
+				nil,
+			)
+			if err != nil {
+				var amqpErr *amqp.Error
+				if ok := errors.As(err, &amqpErr); ok && amqpErr.Code == amqp.NotFound {
+					return false, nil
+				}
+				return false, fmt.Errorf("failed to inspect state queue after reconnect: %w", err)
+			}
+		} else {
+			return false, fmt.Errorf("failed to inspect state queue: %w", err)
+		}
 	}
 
 	active := queue.Messages > 0
@@ -145,7 +256,22 @@ func (s *StateManager) DeleteStateQueue(ctx context.Context, scaledObjectName, n
 		if ok := errors.As(err, &amqpErr); ok && amqpErr.Code == amqp.NotFound {
 			return nil
 		}
-		return fmt.Errorf("failed to delete state queue: %w", err)
+		if isConnectionError(err) {
+			s.logger.Warn("connection error, attempting reconnect", "error", err)
+			if reconnErr := s.reconnect(); reconnErr != nil {
+				return fmt.Errorf("failed to reconnect: %w (original error: %v)", reconnErr, err)
+			}
+			_, err = s.channel.QueueDelete(queueName, false, false, false)
+			if err != nil {
+				var amqpErr *amqp.Error
+				if ok := errors.As(err, &amqpErr); ok && amqpErr.Code == amqp.NotFound {
+					return nil
+				}
+				return fmt.Errorf("failed to delete state queue after reconnect: %w", err)
+			}
+		} else {
+			return fmt.Errorf("failed to delete state queue: %w", err)
+		}
 	}
 
 	s.logger.Info("deleted state queue", "queue", queueName)
