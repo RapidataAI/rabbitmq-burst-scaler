@@ -5,30 +5,40 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/rapidataai/rabbitmq-burst-scaler/internal/config"
 )
 
+// Backoff bounds for consumer reconnection attempts.
+const (
+	reconnectBaseBackoff = 1 * time.Second
+	reconnectMaxBackoff  = 30 * time.Second
+)
+
 // Consumer represents a RabbitMQ consumer for a specific ScaledObject.
 type Consumer struct {
-	conn             *amqp.Connection
-	channel          *amqp.Channel
 	scaledObjectName string
 	namespace        string
 	queueName        string
+	cfg              *config.TriggerConfig
 	stateManager     *StateManager
 	onBurst          func() // Callback for push notifications
 	logger           *slog.Logger
 	cancel           context.CancelFunc
 	done             chan struct{}
+
+	mu      sync.Mutex
+	conn    *amqp.Connection
+	channel *amqp.Channel
 }
 
 // ConsumerManager manages consumers for multiple ScaledObjects.
 type ConsumerManager struct {
 	consumers map[string]*Consumer // key: namespace/name
-	mu        sync.RWMutex
+	mu        sync.Mutex
 	logger    *slog.Logger
 }
 
@@ -50,29 +60,28 @@ func sourceQueueName(scaledObjectName, namespace string) string {
 	return fmt.Sprintf("burst-source-%s-%s", namespace, scaledObjectName)
 }
 
-// GetOrCreateConsumer returns an existing consumer or creates a new one.
+// GetOrCreateConsumer returns a live consumer for the ScaledObject, replacing any
+// cached consumer whose goroutine has exited.
 func (m *ConsumerManager) GetOrCreateConsumer(
 	ctx context.Context,
 	scaledObjectName, namespace string,
 	cfg *config.TriggerConfig,
 	stateManager *StateManager,
-	onBurst func(), // Callback for push notifications
+	onBurst func(),
 ) (*Consumer, error) {
 	key := consumerKey(namespace, scaledObjectName)
-
-	m.mu.RLock()
-	if consumer, ok := m.consumers[key]; ok {
-		m.mu.RUnlock()
-		return consumer, nil
-	}
-	m.mu.RUnlock()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Double-check after acquiring write lock
-	if consumer, ok := m.consumers[key]; ok {
-		return consumer, nil
+	if existing, ok := m.consumers[key]; ok {
+		if existing.IsAlive() {
+			return existing, nil
+		}
+		// Goroutine exited (e.g. context cancelled by Close). Evict and recreate.
+		m.logger.Warn("evicting dead consumer", "scaledObject", scaledObjectName, "namespace", namespace)
+		_ = existing.Close()
+		delete(m.consumers, key)
 	}
 
 	consumer, err := m.createConsumer(ctx, scaledObjectName, namespace, cfg, stateManager, onBurst)
@@ -92,56 +101,15 @@ func (m *ConsumerManager) createConsumer(
 	stateManager *StateManager,
 	onBurst func(),
 ) (*Consumer, error) {
-	conn, err := amqp.Dial(cfg.AMQPURL())
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
-	}
-
-	ch, err := conn.Channel()
-	if err != nil {
-		_ = conn.Close()
-		return nil, fmt.Errorf("failed to open channel: %w", err)
-	}
-
 	queueName := sourceQueueName(scaledObjectName, namespace)
-
-	// Declare the source queue
-	_, err = ch.QueueDeclare(
-		queueName,
-		true,  // durable
-		false, // autoDelete
-		false, // exclusive
-		false, // noWait
-		nil,
-	)
-	if err != nil {
-		_ = ch.Close()
-		_ = conn.Close()
-		return nil, fmt.Errorf("failed to declare source queue: %w", err)
-	}
-
-	// Bind to the exchange with the routing key
-	err = ch.QueueBind(
-		queueName,
-		cfg.RoutingKey,
-		cfg.Exchange,
-		false,
-		nil,
-	)
-	if err != nil {
-		_ = ch.Close()
-		_ = conn.Close()
-		return nil, fmt.Errorf("failed to bind queue to exchange: %w", err)
-	}
 
 	consumerCtx, cancel := context.WithCancel(context.Background())
 
 	consumer := &Consumer{
-		conn:             conn,
-		channel:          ch,
 		scaledObjectName: scaledObjectName,
 		namespace:        namespace,
 		queueName:        queueName,
+		cfg:              cfg,
 		stateManager:     stateManager,
 		onBurst:          onBurst,
 		logger:           m.logger.With("scaledObject", scaledObjectName, "namespace", namespace),
@@ -149,68 +117,180 @@ func (m *ConsumerManager) createConsumer(
 		done:             make(chan struct{}),
 	}
 
-	// Ensure state queue exists
+	if err := consumer.connect(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("initial connect: %w", err)
+	}
+
 	if err := stateManager.EnsureStateQueue(ctx, scaledObjectName, namespace, cfg.BurstDuration); err != nil {
-		_ = consumer.Close()
+		_ = consumer.closeConn()
+		cancel()
 		return nil, fmt.Errorf("failed to ensure state queue: %w", err)
 	}
 
-	// Start consuming
-	go consumer.consume(consumerCtx)
+	go consumer.run(consumerCtx)
 
 	m.logger.Info("created consumer", "scaledObject", scaledObjectName, "namespace", namespace, "queue", queueName)
 	return consumer, nil
 }
 
-// consume processes messages from the source queue.
-func (c *Consumer) consume(ctx context.Context) {
-	defer close(c.done)
-
-	deliveries, err := c.channel.Consume(
-		c.queueName,
-		"",    // consumer tag (auto-generated)
-		false, // autoAck
-		false, // exclusive
-		false, // noLocal
-		false, // noWait
-		nil,
-	)
+// connect dials RabbitMQ and declares + binds the source queue.
+// Caller must hold c.mu or be sure no other goroutine is racing on conn/channel.
+func (c *Consumer) connect() error {
+	conn, err := amqp.Dial(c.cfg.AMQPURL())
 	if err != nil {
-		c.logger.Error("failed to start consuming", "error", err)
-		return
+		return fmt.Errorf("dial: %w", err)
 	}
 
-	c.logger.Info("started consuming messages")
+	ch, err := conn.Channel()
+	if err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("open channel: %w", err)
+	}
 
+	if _, err := ch.QueueDeclare(c.queueName, true, false, false, false, nil); err != nil {
+		_ = ch.Close()
+		_ = conn.Close()
+		return fmt.Errorf("declare queue: %w", err)
+	}
+
+	if err := ch.QueueBind(c.queueName, c.cfg.RoutingKey, c.cfg.Exchange, false, nil); err != nil {
+		_ = ch.Close()
+		_ = conn.Close()
+		return fmt.Errorf("bind queue: %w", err)
+	}
+
+	c.mu.Lock()
+	c.conn = conn
+	c.channel = ch
+	c.mu.Unlock()
+
+	return nil
+}
+
+// closeConn closes the current connection and channel, if any.
+func (c *Consumer) closeConn() error {
+	c.mu.Lock()
+	ch := c.channel
+	conn := c.conn
+	c.channel = nil
+	c.conn = nil
+	c.mu.Unlock()
+
+	var errs []error
+	if ch != nil {
+		if err := ch.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if conn != nil {
+		if err := conn.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("close: %v", errs)
+	}
+	return nil
+}
+
+// currentChannel returns the current AMQP channel under lock.
+func (c *Consumer) currentChannel() *amqp.Channel {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.channel
+}
+
+// IsAlive reports whether the consumer's goroutine is still running.
+func (c *Consumer) IsAlive() bool {
+	select {
+	case <-c.done:
+		return false
+	default:
+		return true
+	}
+}
+
+// run drives the consumer goroutine. It establishes a Consume subscription and
+// reconnects with exponential backoff if the channel/connection drops, so that
+// transient AMQP failures don't permanently silence the consumer.
+func (c *Consumer) run(ctx context.Context) {
+	defer close(c.done)
+	defer func() { _ = c.closeConn() }()
+
+	backoff := reconnectBaseBackoff
+	for {
+		if ctx.Err() != nil {
+			c.logger.Info("consumer stopped")
+			return
+		}
+
+		ch := c.currentChannel()
+		if ch == nil {
+			if err := c.connect(); err != nil {
+				c.logger.Error("reconnect failed", "error", err, "backoff", backoff)
+				if !sleepCtx(ctx, backoff) {
+					return
+				}
+				backoff = nextBackoff(backoff)
+				continue
+			}
+			c.logger.Info("reconnected to RabbitMQ")
+			backoff = reconnectBaseBackoff
+			ch = c.currentChannel()
+		}
+
+		deliveries, err := ch.Consume(c.queueName, "", false, false, false, false, nil)
+		if err != nil {
+			c.logger.Error("failed to start consuming, will reconnect", "error", err, "backoff", backoff)
+			_ = c.closeConn()
+			if !sleepCtx(ctx, backoff) {
+				return
+			}
+			backoff = nextBackoff(backoff)
+			continue
+		}
+
+		c.logger.Info("started consuming messages")
+		backoff = reconnectBaseBackoff
+
+		if !c.processDeliveries(ctx, deliveries) {
+			return
+		}
+
+		// Deliveries channel closed: drop the dead connection and loop to reconnect.
+		c.logger.Warn("delivery channel closed, attempting reconnect")
+		_ = c.closeConn()
+	}
+}
+
+// processDeliveries handles messages from the deliveries channel until ctx is done
+// or the channel closes. Returns false when the context was cancelled (caller should
+// exit), true when the channel closed and the caller should reconnect.
+func (c *Consumer) processDeliveries(ctx context.Context, deliveries <-chan amqp.Delivery) bool {
 	for {
 		select {
 		case <-ctx.Done():
-			c.logger.Info("consumer stopped")
-			return
+			return false
 		case delivery, ok := <-deliveries:
 			if !ok {
-				c.logger.Warn("delivery channel closed")
-				return
+				return true
 			}
 
 			c.logger.Debug("received message", "routingKey", delivery.RoutingKey)
 
-			// Trigger burst
 			if err := c.stateManager.TriggerBurst(ctx, c.scaledObjectName, c.namespace); err != nil {
 				c.logger.Error("failed to trigger burst", "error", err)
-				// Nack and requeue
 				if nackErr := delivery.Nack(false, true); nackErr != nil {
 					c.logger.Error("failed to nack message", "error", nackErr)
 				}
 				continue
 			}
 
-			// Notify listeners for push-based scaling
 			if c.onBurst != nil {
 				c.onBurst()
 			}
 
-			// Ack the message
 			if ackErr := delivery.Ack(false); ackErr != nil {
 				c.logger.Error("failed to ack message", "error", ackErr)
 			}
@@ -218,35 +298,33 @@ func (c *Consumer) consume(ctx context.Context) {
 	}
 }
 
-// Close stops the consumer and cleans up resources.
+// nextBackoff doubles the backoff up to reconnectMaxBackoff.
+func nextBackoff(d time.Duration) time.Duration {
+	d *= 2
+	if d > reconnectMaxBackoff {
+		return reconnectMaxBackoff
+	}
+	return d
+}
+
+// sleepCtx sleeps for d unless ctx is cancelled. Returns false if cancelled.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// Close stops the consumer goroutine and releases its AMQP resources.
 func (c *Consumer) Close() error {
 	if c.cancel != nil {
 		c.cancel()
 	}
-
-	// Wait for consumer goroutine to finish
-	select {
-	case <-c.done:
-	default:
-	}
-
-	var errs []error
-
-	if c.channel != nil {
-		if err := c.channel.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	if c.conn != nil {
-		if err := c.conn.Close(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("errors closing consumer: %v", errs)
-	}
+	<-c.done
 	return nil
 }
 
